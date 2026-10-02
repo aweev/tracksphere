@@ -1,0 +1,398 @@
+openapi: 3.1.0
+info:
+  title: TrackSphere API
+  version: 1.0.0
+  description: |
+    Multi-tenant shipment tracking. All responses use a standard envelope:
+
+        { "data": ..., "meta": {...} }                     # success
+        { "error": { "code": "...", "message": "..." } }   # failure
+
+    Authentication is a cookie session (`tracksphere_session`, HttpOnly).
+    Webhooks are HMAC-signed and are not session-authenticated.
+
+    Multi-tenant note: resources belonging to another tenant return **404**
+    (never 403) so identifiers cannot be enumerated across tenants.
+servers:
+  - url: https://api.example.com
+    description: production
+  - url: http://localhost:8080
+    description: local
+
+tags:
+  - { name: health }
+  - { name: auth }
+  - { name: shipments }
+  - { name: alerts }
+  - { name: tracking }
+  - { name: webhooks }
+  - { name: stream }
+
+paths:
+  /api/v1/health:
+    get:
+      tags: [health]
+      summary: Liveness and dependency status
+      security: []
+      responses:
+        '200':
+          description: Service healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      status: { type: string, enum: [ok, degraded] }
+                      database: { type: boolean }
+                      sseClients: { type: integer }
+                      uptimeSec: { type: integer }
+                      version: { type: string }
+        '503':
+          description: Database unreachable
+
+  /api/v1/auth/register:
+    post:
+      tags: [auth]
+      summary: Create a tenant and its owner user, then sign in
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [orgName, name, email, password]
+              properties:
+                orgName: { type: string, example: Acme Logistics }
+                name: { type: string, example: Dara Ops }
+                email: { type: string, format: email }
+                password: { type: string, minLength: 8 }
+      responses:
+        '201':
+          description: Tenant created and session cookie issued
+          headers:
+            Set-Cookie: { schema: { type: string } }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      user: { $ref: '#/components/schemas/User' }
+                      tenant: { $ref: '#/components/schemas/Tenant' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409':
+          description: Email already registered
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/v1/auth/login:
+    post:
+      tags: [auth]
+      summary: Authenticate with email and password
+      description: |
+        When MFA is enabled the response is `{ mfaRequired: true, challenge }`
+        and **no cookie is set** until `/auth/mfa/verify` succeeds.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+      responses:
+        '200':
+          description: Signed in, or MFA challenge issued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      user: { $ref: '#/components/schemas/User' }
+                      mfaRequired: { type: boolean }
+                      challenge: { type: string, description: Short-lived MFA token }
+        '401':
+          description: Invalid credentials (uniform message; no user enumeration)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/v1/auth/mfa/verify:
+    post:
+      tags: [auth]
+      summary: Complete an MFA challenge
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [challenge, code]
+              properties:
+                challenge: { type: string }
+                code: { type: string, minLength: 6, maxLength: 6 }
+      responses:
+        '200':
+          description: Cookie session issued; challenge consumed
+          headers:
+            Set-Cookie: { schema: { type: string } }
+        '401':
+          description: Challenge invalid/expired or code incorrect
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/v1/auth/me:
+    get:
+      tags: [auth]
+      summary: Current session's user
+      responses:
+        '200':
+          description: Authenticated user
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      user: { $ref: '#/components/schemas/User' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+
+  /api/v1/auth/logout:
+    post:
+      tags: [auth]
+      summary: Revoke the current session and clear the cookie
+      responses:
+        '200': { description: Signed out }
+
+  /api/v1/auth/mfa/enroll:
+    post:
+      tags: [auth]
+      summary: Generate a TOTP secret (stored sealed; MFA not yet enabled)
+      responses:
+        '200':
+          description: Secret and otpauth URI for the authenticator app
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      secret: { type: string }
+                      otpauthURI: { type: string }
+
+  /api/v1/auth/mfa/enable:
+    post:
+      tags: [auth]
+      summary: Confirm a TOTP code and enable MFA
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code: { type: string }
+      responses:
+        '200': { description: MFA enabled }
+        '401': { description: Incorrect code }
+
+  /api/v1/auth/mfa/disable:
+    post:
+      tags: [auth]
+      summary: Disable MFA (requires a valid current code)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code: { type: string }
+      responses:
+        '200': { description: MFA disabled }
+        '401': { description: Incorrect code }
+
+  /api/v1/dashboard:
+    get:
+      tags: [shipments]
+      summary: Aggregated operations metrics for the caller's tenant
+      responses:
+        '200':
+          description: Tenant dashboard statistics
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/DashboardStats' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+  /api/v1/shipments:
+    get:
+      tags: [shipments]
+      summary: List shipments for the caller's tenant
+      parameters:
+        - { in: query, name: status, schema: { $ref: '#/components/schemas/Status' } }
+        - { in: query, name: carrier, schema: { type: string } }
+        - { in: query, name: search, description: 'tracking number or reference', schema: { type: string } }
+        - { in: query, name: limit, schema: { type: integer, default: 25, maximum: 100 } }
+        - { in: query, name: offset, schema: { type: integer, default: 0 } }
+      responses:
+        '200':
+          description: Page of shipments
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Shipment' }
+                  meta:
+                    type: object
+                    properties:
+                      total: { type: integer }
+                      limit: { type: integer }
+                      page: { type: integer }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+    post:
+      tags: [shipments]
+      summary: Create a shipment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [trackingNumber, carrier, mode]
+              properties:
+                trackingNumber: { type: string, example: TS-8842-LAG }
+                reference: { type: string }
+                carrier: { type: string, example: maersk }
+                mode: { $ref: '#/components/schemas/Mode' }
+                origin: { type: string }
+                destination: { type: string }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/Shipment' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409':
+          description: Tracking number already exists
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/v1/shipments/{id}:
+    get:
+      tags: [shipments]
+      summary: Fetch one shipment
+      description: 'Returns 404 both when the shipment does not exist and when it belongs to another tenant.'
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: The shipment
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/Shipment' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/shipments/{id}/events:
+    get:
+      tags: [shipments]
+      summary: Timeline for one shipment
+      description: |
+        Returns 404 (not an empty 200) when the shipment is not visible to the
+        caller, so foreign shipment ids cannot be confirmed by enumeration.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Events ordered by occurrence time
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/ShipmentEvent' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [shipments]
+      summary: Append an operator-entered event
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code: { type: string, example: CUSTOMS_HOLD }
+                description: { type: string }
+                location: { type: string }
+                lat: { type: number, format: double }
+                lng: { type: number, format: double }
+                status: { $ref: '#/components/schemas/Status' }
+      responses:
+        '201': { description: Event accepted into the ingestion pipeline }
+
+  /api/v1/alerts:
+    get:
+      tags: [alerts]
+      summary: List alerts (open by default)
+      parameters:
+        - { in: query, name: status, schema: { type: string, enum: [open, resolved, all] } }
+      responses:
+        '200':
+          description: Alerts for the caller's tenant
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Alert' }
+
+  /api/v1/alerts/{id}/resolve:
+    post:
+      tags: [alerts]
+      summary: Mark an alert resolved
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Resolved }
+

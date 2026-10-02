@@ -1,0 +1,768 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>TRK-4812-SH Details | Apex Global Logistics</title>
+  
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  
+  <!-- Phosphor Icons -->
+  <script src="https://unpkg.com/@phosphor-icons/web"></script>
+
+  <style>
+    /* ==========================================================================
+       TRACKSPHERE BRAND KIT & CSS VARIABLES
+       ========================================================================== */
+    :root {
+      /* Colors */
+      --color-bg: #F3F4F6;
+      --color-surface: #FFFFFF;
+      --color-primary: #1E293B; /* Deep Navy */
+      --color-primary-dark: #0F172A;
+      --color-accent: #FF6B00; /* Action Orange */
+      --color-accent-hover: #E66000;
+      --color-accent-light: #FFF0E5;
+      --color-success: #10B981;
+      --color-success-light: #D1FAE5;
+      --color-text-main: #111827;
+      --color-text-muted: #6B7280;
+      --color-border: #E5E7EB;
+      
+      /* Typography */
+      --font-sans: 'Plus Jakarta Sans', sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+      
+      /* Radii */
+      --radius-card: 24px;
+      --radius-pill: 999px;
+      
+      /* Shadows */
+      --shadow-sm: 0 2px 4px rgba(0,0,0,0.02);
+      --shadow-md: 0 4px 12px rgba(0,0,0,0.05);
+      --shadow-modal: 0 24px 48px -12px rgba(15, 23, 42, 0.2);
+      
+      /* Transitions */
+      --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: var(--font-sans);
+      background-color: var(--color-bg);
+      color: var(--color-text-main);
+      -webkit-font-smoothing: antialiased;
+      line-height: 1.5;
+    }
+
+    /* ==========================================================================
+       LAYOUT & UTILITIES
+       ========================================================================== */
+    .container {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 0 24px 64px;
+    }
+
+    .card {
+      background: var(--color-surface);
+      border-radius: var(--radius-card);
+      border: 1px solid var(--color-border);
+      padding: 24px;
+      box-shadow: var(--shadow-sm);
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      font-family: var(--font-sans);
+      font-weight: 600;
+      font-size: 0.875rem;
+      padding: 10px 20px;
+      border-radius: var(--radius-pill);
+      border: none;
+      cursor: pointer;
+      transition: all var(--transition-fast);
+      text-decoration: none;
+    }
+
+    .btn-primary {
+      background-color: var(--color-accent);
+      color: var(--color-surface);
+    }
+    .btn-primary:hover { background-color: var(--color-accent-hover); transform: translateY(-1px); }
+
+    .btn-secondary {
+      background-color: var(--color-surface);
+      color: var(--color-primary);
+      border: 1px solid var(--color-border);
+    }
+    .btn-secondary:hover { border-color: var(--color-text-muted); }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      border-radius: var(--radius-pill);
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .badge-transit { background: var(--color-accent-light); color: var(--color-accent); }
+    .badge-success { background: var(--color-success-light); color: var(--color-success); }
+
+    /* ==========================================================================
+       HEADER
+       ========================================================================== */
+    .site-header {
+      padding: 24px 0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .tenant-brand {
+      display: flex; align-items: center; gap: 10px;
+      color: var(--color-primary); font-weight: 700; font-size: 1.125rem; text-decoration: none;
+    }
+    .tenant-brand-icon {
+      width: 32px; height: 32px; background-color: var(--color-primary); color: white;
+      border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 18px;
+    }
+
+    /* ==========================================================================
+       SUMMARY SECTION
+       ========================================================================== */
+    .summary-card {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 24px;
+      flex-wrap: wrap;
+      gap: 24px;
+    }
+    .summary-left .tracking-id {
+      font-family: var(--font-mono);
+      font-size: 1.75rem;
+      font-weight: 600;
+      color: var(--color-primary-dark);
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .summary-left .route {
+      color: var(--color-text-muted);
+      font-size: 0.875rem;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 500;
+    }
+    .summary-right {
+      text-align: right;
+    }
+    .summary-right .eta-label {
+      font-size: 0.75rem;
+      color: var(--color-text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+    .summary-right .eta-date {
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: var(--color-primary);
+    }
+    
+    /* ==========================================================================
+       MOBILE TABS (Hidden on Desktop)
+       ========================================================================== */
+    .mobile-tabs {
+      display: none;
+      background: var(--color-border);
+      padding: 4px;
+      border-radius: var(--radius-pill);
+      margin-bottom: 24px;
+    }
+    .mobile-tab {
+      flex: 1;
+      text-align: center;
+      padding: 8px 16px;
+      border-radius: var(--radius-pill);
+      font-weight: 600;
+      font-size: 0.875rem;
+      color: var(--color-text-muted);
+      cursor: pointer;
+      transition: all var(--transition-fast);
+    }
+    .mobile-tab.active {
+      background: var(--color-surface);
+      color: var(--color-primary);
+      box-shadow: var(--shadow-sm);
+    }
+
+    /* ==========================================================================
+       GRID LAYOUT
+       ========================================================================== */
+    .grid-layout {
+      display: grid;
+      grid-template-columns: 1.6fr 1fr;
+      gap: 24px;
+      align-items: start;
+    }
+
+    .col-main { display: flex; flex-direction: column; gap: 24px; }
+    .col-side { display: flex; flex-direction: column; gap: 24px; }
+
+    /* ==========================================================================
+       MAP COMPONENT
+       ========================================================================== */
+    .map-card { padding: 8px; }
+    .map-container {
+      background-color: #E2E8F0; /* Map base color */
+      border-radius: 16px;
+      height: 320px;
+      position: relative;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .map-overlay-info {
+      position: absolute;
+      bottom: 16px; left: 16px;
+      background: var(--color-surface);
+      padding: 8px 12px;
+      border-radius: 12px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      box-shadow: var(--shadow-md);
+    }
+    
+    /* Live Dot Animation */
+    .live-dot-container {
+      position: absolute;
+      top: 50%; left: 60%; /* Simulated location */
+      width: 16px; height: 16px;
+    }
+    .live-dot {
+      width: 100%; height: 100%;
+      background-color: var(--color-accent);
+      border-radius: 50%;
+      position: relative;
+      z-index: 2;
+    }
+    .live-pulse {
+      position: absolute;
+      top: -50%; left: -50%;
+      width: 200%; height: 200%;
+      background-color: var(--color-accent);
+      border-radius: 50%;
+      z-index: 1;
+      animation: pulse 2s infinite cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    @keyframes pulse {
+      0% { transform: scale(0.5); opacity: 0.8; }
+      100% { transform: scale(2); opacity: 0; }
+    }
+
+    /* ==========================================================================
+       DOCUMENTS COMPONENT
+       ========================================================================== */
+    .section-title {
+      font-size: 1.125rem;
+      font-weight: 700;
+      color: var(--color-primary);
+      margin-bottom: 16px;
+    }
+    .doc-list { list-style: none; }
+    .doc-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 0;
+      border-bottom: 1px solid var(--color-border);
+    }
+    .doc-item:last-child { border-bottom: none; padding-bottom: 0; }
+    .doc-info {
+      display: flex; align-items: center; gap: 12px;
+    }
+    .doc-icon {
+      width: 40px; height: 40px;
+      background: #F8FAFC;
+      border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      color: var(--color-primary); font-size: 20px;
+    }
+    .doc-name { font-size: 0.875rem; font-weight: 600; color: var(--color-primary); }
+    .doc-meta { font-size: 0.75rem; color: var(--color-text-muted); margin-top: 2px; }
+    .doc-actions { display: flex; gap: 8px; }
+    .icon-btn {
+      width: 32px; height: 32px;
+      border-radius: 50%; border: none;
+      background: var(--color-bg);
+      color: var(--color-primary);
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer; transition: background var(--transition-fast);
+    }
+    .icon-btn:hover { background: #E2E8F0; }
+
+    /* ==========================================================================
+       TIMELINE COMPONENT
+       ========================================================================== */
+    .timeline {
+      position: relative;
+      padding-left: 20px;
+    }
+    /* The vertical line */
+    .timeline::before {
+      content: '';
+      position: absolute;
+      top: 10px; bottom: 30px; left: 0;
+      width: 2px;
+      background: var(--color-border);
+    }
+    .tl-step {
+      position: relative;
+      padding-bottom: 32px;
+    }
+    .tl-step:last-child { padding-bottom: 0; }
+    
+    /* Nodes */
+    .tl-node {
+      position: absolute;
+      left: -28px; top: 2px;
+      width: 18px; height: 18px;
+      border-radius: 50%;
+      background: var(--color-surface);
+      border: 2px solid var(--color-border);
+      z-index: 2;
+    }
+    /* Completed Step */
+    .tl-step.completed .tl-node {
+      background: var(--color-primary);
+      border-color: var(--color-primary);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .tl-step.completed .tl-node::after {
+      content: '✓'; color: white; font-size: 10px; font-weight: bold;
+    }
+    /* Active Step */
+    .tl-step.active .tl-node {
+      background: var(--color-surface);
+      border-color: var(--color-accent);
+      border-width: 4px;
+    }
+    /* The active line fill */
+    .timeline::after {
+      content: '';
+      position: absolute;
+      top: 10px; left: 0;
+      width: 2px;
+      background: var(--color-primary);
+      height: 45%; /* Arbitrary fill based on active step */
+      z-index: 1;
+    }
+
+    .tl-content { padding-left: 16px; }
+    .tl-title { font-size: 0.875rem; font-weight: 700; color: var(--color-primary); margin-bottom: 2px; }
+    .tl-time { font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text-muted); margin-bottom: 4px; }
+    .tl-desc { font-size: 0.875rem; color: var(--color-text-muted); }
+    
+    .tl-step.active .tl-title { color: var(--color-accent); }
+
+    /* ==========================================================================
+       MODALS
+       ========================================================================== */
+    .modal-backdrop {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(15, 23, 42, 0.4);
+      backdrop-filter: blur(4px);
+      z-index: 1000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 200ms ease;
+    }
+    .modal-backdrop.open {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    
+    .modal-card {
+      background: var(--color-surface);
+      border-radius: var(--radius-card);
+      width: 100%;
+      max-width: 440px;
+      padding: 32px;
+      box-shadow: var(--shadow-modal);
+      transform: translateY(20px) scale(0.95);
+      transition: all 200ms ease;
+      position: relative;
+    }
+    .modal-backdrop.open .modal-card {
+      transform: translateY(0) scale(1);
+    }
+    .modal-close {
+      position: absolute;
+      top: 20px; right: 20px;
+      background: none; border: none;
+      font-size: 24px; color: var(--color-text-muted);
+      cursor: pointer;
+    }
+    
+    /* Forms inside Modal */
+    .form-group { margin-bottom: 20px; }
+    .form-label { display: block; font-size: 0.875rem; font-weight: 600; margin-bottom: 8px; color: var(--color-primary); }
+    .form-input {
+      width: 100%;
+      padding: 12px 16px;
+      border-radius: 12px;
+      border: 1px solid var(--color-border);
+      font-family: var(--font-sans);
+      font-size: 1rem;
+      outline: none;
+      transition: border-color var(--transition-fast);
+    }
+    .form-input:focus { border-color: var(--color-accent); }
+
+    /* Document Modal specific */
+    .modal-document { max-width: 800px; height: 80vh; display: flex; flex-direction: column; padding: 24px; }
+    .doc-viewer-area {
+      flex: 1; background: var(--color-bg); border-radius: 12px;
+      margin-top: 16px; display: flex; align-items: center; justify-content: center;
+      color: var(--color-text-muted); border: 1px dashed #CBD5E1;
+    }
+
+    /* ==========================================================================
+       RESPONSIVE (MOBILE)
+       ========================================================================== */
+    @media (max-width: 768px) {
+      .summary-card { flex-direction: column; align-items: flex-start; gap: 16px; }
+      .summary-right { text-align: left; }
+      
+      .grid-layout { grid-template-columns: 1fr; }
+      
+      .mobile-tabs { display: flex; }
+      
+      /* Mobile Toggle Logic classes */
+      .mobile-hidden { display: none !important; }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <!-- Header -->
+    <header class="site-header">
+      <a href="#" class="tenant-brand">
+        <div class="tenant-brand-icon"><i class="ph ph-globe-hemisphere-east"></i></div>
+        Apex Global
+      </a>
+      <button class="btn btn-secondary" onclick="openModal('notificationModal')">
+        <i class="ph-bold ph-bell-ringing"></i> Get Updates
+      </button>
+    </header>
+
+    <!-- Summary Section -->
+    <div class="card summary-card">
+      <div class="summary-left">
+        <div class="tracking-id">
+          TRK-4812-SH
+          <div class="badge badge-transit"><span class="live-dot" style="width:8px;height:8px;display:inline-block;"></span> IN TRANSIT</div>
+        </div>
+        <div class="route">
+          <i class="ph ph-package"></i> Shanghai, CN <i class="ph-bold ph-arrow-right"></i> Los Angeles, US
+        </div>
+      </div>
+      <div class="summary-right">
+        <div class="eta-label">Estimated Delivery</div>
+        <div class="eta-date">Thursday, May 22</div>
+      </div>
+    </div>
+
+    <!-- Mobile Tabs (Visible only on small screens) -->
+    <div class="mobile-tabs">
+      <div class="mobile-tab active" id="tabMap" onclick="switchMobileTab('map')">Map & Docs</div>
+      <div class="mobile-tab" id="tabTimeline" onclick="switchMobileTab('timeline')">Timeline</div>
+    </div>
+
+    <!-- Main Grid Layout -->
+    <div class="grid-layout">
+      
+      <!-- Left Column: Map & Docs -->
+      <div class="col-main" id="colMap">
+        <!-- Map Card -->
+        <div class="card map-card">
+          <div class="map-container">
+            <!-- Simulated Map Graphic -->
+            <svg width="100%" height="100%" viewBox="0 0 400 320" preserveAspectRatio="xMidYMid slice" fill="none">
+              <!-- Water/Grid -->
+              <path d="M0 80h400 M0 160h400 M0 240h400 M100 0v320 M200 0v320 M300 0v320" stroke="#CBD5E1" stroke-width="0.5" stroke-dasharray="4 4" opacity="0.5"/>
+              <!-- Landmass blobs -->
+              <path d="M-50 100 Q 50 80 120 180 T 50 350 L -50 350 Z" fill="#F1F5F9"/>
+              <path d="M450 50 Q 350 100 300 200 T 380 350 L 450 350 Z" fill="#F1F5F9"/>
+              <!-- Route Path -->
+              <path d="M 80 180 Q 200 120 320 220" stroke="#94A3B8" stroke-width="2" stroke-dasharray="6 6"/>
+              <!-- Origin Pin -->
+              <circle cx="80" cy="180" r="6" fill="#1E293B"/>
+              <!-- Destination Pin -->
+              <circle cx="320" cy="220" r="6" fill="#1E293B" opacity="0.3"/>
+            </svg>
+            
+            <!-- Live Pulse Dot positioned on the SVG path -->
+            <div class="live-dot-container" style="top: 40%; left: 45%;">
+              <div class="live-pulse"></div>
+              <div class="live-dot"></div>
+            </div>
+
+            <div class="map-overlay-info">
+              <i class="ph-fill ph-navigation-arrow" style="color:var(--color-accent)"></i> Vessel: MSC Oscar
+            </div>
+          </div>
+        </div>
+
+        <!-- Documents Card -->
+        <div class="card">
+          <h2 class="section-title">Documents</h2>
+          <ul class="doc-list">
+            <li class="doc-item">
+              <div class="doc-info">
+                <div class="doc-icon"><i class="ph-fill ph-file-pdf"></i></div>
+                <div>
+                  <div class="doc-name">Commercial_Invoice.pdf</div>
+                  <div class="doc-meta">142 KB • Uploaded May 10</div>
+                </div>
+              </div>
+              <div class="doc-actions">
+                <button class="icon-btn" title="View" onclick="openModal('documentModal')"><i class="ph ph-eye"></i></button>
+                <button class="icon-btn" title="Download" onclick="triggerDownload('Commercial_Invoice.pdf')"><i class="ph ph-download-simple"></i></button>
+              </div>
+            </li>
+            <li class="doc-item">
+              <div class="doc-info">
+                <div class="doc-icon"><i class="ph-fill ph-file-pdf"></i></div>
+                <div>
+                  <div class="doc-name">Waybill_Copy.pdf</div>
+                  <div class="doc-meta">85 KB • Uploaded May 12</div>
+                </div>
+              </div>
+              <div class="doc-actions">
+                <button class="icon-btn" title="View" onclick="openModal('documentModal')"><i class="ph ph-eye"></i></button>
+                <button class="icon-btn" title="Download" onclick="triggerDownload('Waybill_Copy.pdf')"><i class="ph ph-download-simple"></i></button>
+              </div>
+            </li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- Right Column: Timeline -->
+      <div class="col-side mobile-hidden" id="colTimeline">
+        <div class="card">
+          <h2 class="section-title">Tracking History</h2>
+          
+          <div class="timeline">
+            <!-- Future Step -->
+            <div class="tl-step">
+              <div class="tl-node"></div>
+              <div class="tl-content">
+                <div class="tl-title" style="color:var(--color-text-muted)">Estimated Delivery</div>
+                <div class="tl-time">Thu, May 22</div>
+                <div class="tl-desc">Los Angeles, US</div>
+              </div>
+            </div>
+
+            <!-- Active Step -->
+            <div class="tl-step active">
+              <div class="tl-node"></div>
+              <div class="tl-content">
+                <div class="tl-title">Departed Origin Port</div>
+                <div class="tl-time">Today, 10:45 AM</div>
+                <div class="tl-desc">Vessel departed Shanghai port. En route to Los Angeles.</div>
+              </div>
+            </div>
+
+            <!-- Completed Step -->
+            <div class="tl-step completed">
+              <div class="tl-node"></div>
+              <div class="tl-content">
+                <div class="tl-title">Customs Cleared</div>
+                <div class="tl-time">Yesterday, 14:20 PM</div>
+                <div class="tl-desc">Export customs declaration approved.</div>
+              </div>
+            </div>
+
+            <!-- Completed Step -->
+            <div class="tl-step completed">
+              <div class="tl-node"></div>
+              <div class="tl-content">
+                <div class="tl-title">Arrived at Port</div>
+                <div class="tl-time">May 14, 08:00 AM</div>
+                <div class="tl-desc">Container gated in at Shanghai terminal.</div>
+              </div>
+            </div>
+
+            <!-- Completed Step -->
+            <div class="tl-step completed">
+              <div class="tl-node"></div>
+              <div class="tl-content">
+                <div class="tl-title">Picked Up</div>
+                <div class="tl-time">May 12, 09:30 AM</div>
+                <div class="tl-desc">Cargo collected from shipper facility.</div>
+              </div>
+            </div>
+            
+            <!-- Completed Step -->
+            <div class="tl-step completed">
+              <div class="tl-node"></div>
+              <div class="tl-content">
+                <div class="tl-title">Shipment Booked</div>
+                <div class="tl-time">May 10, 11:15 AM</div>
+                <div class="tl-desc">Booking confirmed by carrier.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ==========================================================================
+       MODALS
+       ========================================================================== -->
+       
+  <!-- Notification Opt-in Modal -->
+  <div class="modal-backdrop" id="notificationModal">
+    <div class="modal-card">
+      <button class="modal-close" onclick="closeModal('notificationModal')"><i class="ph ph-x"></i></button>
+      <h2 class="section-title" style="margin-bottom: 8px;">Get tracking updates</h2>
+      <p style="color:var(--color-text-muted); font-size: 0.875rem; margin-bottom: 24px;">
+        Receive automatic alerts when your shipment reaches key milestones or if there are delays.
+      </p>
+      
+      <form onsubmit="handleNotificationSubmit(event)">
+        <div class="form-group">
+          <label class="form-label">Email Address</label>
+          <input type="email" class="form-input" placeholder="name@company.com" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">WhatsApp Number (Optional)</label>
+          <input type="tel" class="form-input" placeholder="+1 (555) 000-0000">
+        </div>
+        <button type="submit" class="btn btn-primary" style="width: 100%; height: 48px; font-size: 1rem;">
+          Subscribe to Updates
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Document Viewer Modal -->
+  <div class="modal-backdrop" id="documentModal">
+    <div class="modal-card modal-document">
+      <button class="modal-close" onclick="closeModal('documentModal')"><i class="ph ph-x"></i></button>
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <h2 class="section-title" style="margin-bottom: 0;">Document Preview</h2>
+        <button class="btn btn-secondary" style="padding: 6px 16px;" onclick="triggerDownload('Preview_Doc.pdf')">
+          <i class="ph ph-download-simple"></i> Download
+        </button>
+      </div>
+      
+      <!-- Placeholder for PDF iFrame -->
+      <div class="doc-viewer-area">
+        <div style="text-align: center;">
+          <i class="ph-fill ph-file-pdf" style="font-size: 48px; color: #CBD5E1; margin-bottom: 12px;"></i>
+          <p>PDF Viewer Component</p>
+          <p style="font-size: 12px; margin-top: 4px;">(In production, an iframe rendering the document goes here)</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==========================================================================
+       INTERACTIVE LOGIC
+       ========================================================================== -->
+  <script>
+    // --- Mobile Tab Switching ---
+    function switchMobileTab(tab) {
+      const colMap = document.getElementById('colMap');
+      const colTimeline = document.getElementById('colTimeline');
+      const tabMap = document.getElementById('tabMap');
+      const tabTimeline = document.getElementById('tabTimeline');
+
+      if (tab === 'map') {
+        colMap.classList.remove('mobile-hidden');
+        colTimeline.classList.add('mobile-hidden');
+        tabMap.classList.add('active');
+        tabTimeline.classList.remove('active');
+      } else {
+        colTimeline.classList.remove('mobile-hidden');
+        colMap.classList.add('mobile-hidden');
+        tabTimeline.classList.add('active');
+        tabMap.classList.remove('active');
+      }
+    }
+
+    // Handle resize to ensure desktop layout doesn't get broken by mobile classes
+    window.addEventListener('resize', () => {
+      if (window.innerWidth > 768) {
+        document.getElementById('colMap').classList.remove('mobile-hidden');
+        document.getElementById('colTimeline').classList.remove('mobile-hidden');
+      } else {
+        // Re-apply correct hidden state based on active tab
+        const activeTab = document.querySelector('.mobile-tab.active').id;
+        if (activeTab === 'tabMap') switchMobileTab('map');
+        else switchMobileTab('timeline');
+      }
+    });
+
+    // --- Modal Logic ---
+    function openModal(id) {
+      document.getElementById(id).classList.add('open');
+      // Prevent body scrolling
+      document.body.style.overflow = 'hidden';
+    }
+
+    function closeModal(id) {
+      document.getElementById(id).classList.remove('open');
+      document.body.style.overflow = 'auto';
+    }
+
+    // Close modal when clicking outside the card
+    document.querySelectorAll('.modal-backdrop').forEach(backdrop => {
+      backdrop.addEventListener('click', function(e) {
+        if (e.target === this) {
+          closeModal(this.id);
+        }
+      });
+    });
+
+    // --- Form & Action Simulation ---
+    function handleNotificationSubmit(e) {
+      e.preventDefault();
+      alert("Success! You have been subscribed to updates for TRK-4812-SH.");
+      closeModal('notificationModal');
+    }
+
+    function triggerDownload(filename) {
+      // In production, this would trigger an actual file blob download
+      alert(`Initiating secure download for: ${filename}`);
+    }
+  </script>
+</body>
+</html>

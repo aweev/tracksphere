@@ -1,0 +1,647 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Customer Dashboard | TrackSphere</title>
+  
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  
+  <!-- Phosphor Icons -->
+  <script src="https://unpkg.com/@phosphor-icons/web"></script>
+
+  <style>
+    /* ==========================================================================
+       TRACKSPHERE BRAND KIT & CSS VARIABLES
+       ========================================================================== */
+    :root {
+      /* Colors */
+      --color-bg: #F3F4F6; /* Soft Slate */
+      --color-surface: #FFFFFF; /* Cloud White */
+      --color-primary: #1E293B; /* Deep Navy */
+      --color-primary-dark: #0F172A;
+      --color-accent: #FF6B00; /* Action Orange */
+      --color-accent-hover: #E66000;
+      
+      /* Semantic Colors */
+      --color-success: #10B981;
+      --color-success-bg: #D1FAE5;
+      --color-warning: #F59E0B;
+      --color-warning-bg: #FEF3C7;
+      --color-danger: #EF4444;
+      --color-danger-bg: #FEE2E2;
+      --color-info: #3B82F6;
+      --color-info-bg: #DBEAFE;
+      
+      /* Text & Borders */
+      --color-text-main: #111827;
+      --color-text-muted: #6B7280;
+      --color-border: #E5E7EB;
+      
+      /* Typography */
+      --font-sans: 'Plus Jakarta Sans', sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+      
+      /* Radii */
+      --radius-card: 24px;
+      --radius-pill: 999px;
+      
+      /* Shadows */
+      --shadow-sm: 0 2px 4px rgba(0,0,0,0.02);
+      --shadow-md: 0 4px 12px rgba(0,0,0,0.04);
+      --shadow-hover: 0 12px 24px -4px rgba(30, 41, 59, 0.08);
+      
+      /* Transitions */
+      --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: var(--font-sans);
+      background-color: var(--color-bg);
+      color: var(--color-text-main);
+      -webkit-font-smoothing: antialiased;
+      line-height: 1.5;
+      padding-bottom: 64px;
+    }
+
+    /* ==========================================================================
+       TOP NAVIGATION
+       ========================================================================== */
+    .top-nav {
+      background-color: var(--color-surface);
+      border-bottom: 1px solid var(--color-border);
+      position: sticky;
+      top: 0;
+      z-index: 50;
+    }
+
+    .nav-container {
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 0 24px;
+      height: 72px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .nav-left { display: flex; align-items: center; gap: 40px; }
+    
+    .brand {
+      display: flex; align-items: center; gap: 10px;
+      font-weight: 700; font-size: 1.125rem; color: var(--color-primary-dark);
+      text-decoration: none;
+    }
+    .brand-icon {
+      width: 32px; height: 32px;
+      background-color: var(--color-primary); color: white;
+      border-radius: 8px; display: flex; align-items: center; justify-content: center;
+      font-size: 18px;
+    }
+
+    .nav-links { display: flex; gap: 8px; }
+    .nav-link {
+      padding: 8px 16px;
+      border-radius: var(--radius-pill);
+      color: var(--color-text-muted);
+      font-weight: 600;
+      font-size: 0.875rem;
+      text-decoration: none;
+      transition: all var(--transition-fast);
+    }
+    .nav-link:hover { color: var(--color-primary); background: var(--color-bg); }
+    .nav-link.active { color: var(--color-surface); background: var(--color-primary); }
+
+    .nav-right { display: flex; align-items: center; gap: 16px; }
+    .action-btn {
+      width: 40px; height: 40px;
+      border-radius: 50%; border: 1px solid var(--color-border);
+      background: var(--color-surface); color: var(--color-text-main);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 20px; cursor: pointer; transition: all var(--transition-fast);
+      position: relative;
+    }
+    .action-btn:hover { background: var(--color-bg); }
+    .badge-dot {
+      position: absolute; top: 8px; right: 8px;
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--color-danger); border: 2px solid var(--color-surface);
+    }
+    .user-avatar {
+      width: 40px; height: 40px; border-radius: 50%;
+      background: var(--color-accent-hover); color: white;
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 700; font-size: 0.875rem;
+    }
+
+    /* ==========================================================================
+       DASHBOARD LAYOUT
+       ========================================================================== */
+    .dashboard-container {
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 40px 24px;
+    }
+
+    /* Header & KPIs */
+    .page-header { margin-bottom: 32px; }
+    .page-title { font-size: 2rem; font-weight: 800; color: var(--color-primary-dark); letter-spacing: -0.03em; margin-bottom: 8px; }
+    .page-subtitle { font-size: 1rem; color: var(--color-text-muted); }
+
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 24px;
+      margin-bottom: 40px;
+    }
+
+    .kpi-card {
+      background: var(--color-surface);
+      border-radius: var(--radius-card);
+      border: 1px solid var(--color-border);
+      padding: 24px;
+      display: flex; align-items: flex-start; gap: 16px;
+      box-shadow: var(--shadow-sm);
+    }
+    .kpi-icon {
+      width: 48px; height: 48px; border-radius: 16px;
+      display: flex; align-items: center; justify-content: center; font-size: 24px;
+    }
+    .kpi-icon.navy { background: var(--color-primary); color: white; }
+    .kpi-icon.orange { background: #FFF0E5; color: var(--color-accent); }
+    .kpi-icon.green { background: var(--color-success-bg); color: var(--color-success); }
+    
+    .kpi-content { flex: 1; }
+    .kpi-label { font-size: 0.875rem; font-weight: 600; color: var(--color-text-muted); margin-bottom: 4px; }
+    .kpi-value { font-size: 2rem; font-weight: 800; color: var(--color-primary-dark); line-height: 1.1; margin-bottom: 8px; font-family: var(--font-mono);}
+    .kpi-trend { font-size: 0.75rem; font-weight: 600; display: inline-flex; align-items: center; gap: 4px; }
+    .trend-up { color: var(--color-success); }
+    .trend-neutral { color: var(--color-text-muted); }
+
+    /* Main Content Grid */
+    .content-grid {
+      display: grid;
+      grid-template-columns: 2fr 1fr;
+      gap: 32px;
+    }
+
+    .section-header {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 20px;
+    }
+    .section-title { font-size: 1.25rem; font-weight: 700; color: var(--color-primary-dark); }
+    
+    .btn-text {
+      background: none; border: none; font-family: var(--font-sans);
+      font-size: 0.875rem; font-weight: 600; color: var(--color-accent);
+      cursor: pointer; display: inline-flex; align-items: center; gap: 4px;
+      transition: color var(--transition-fast);
+    }
+    .btn-text:hover { color: var(--color-accent-hover); }
+
+    /* ==========================================================================
+       SHIPMENT CARDS (Active Shipments)
+       ========================================================================== */
+    .shipments-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+      gap: 20px;
+    }
+
+    .shipment-card {
+      background: var(--color-surface);
+      border-radius: var(--radius-card);
+      border: 1px solid var(--color-border);
+      padding: 20px;
+      box-shadow: var(--shadow-sm);
+      cursor: pointer;
+      transition: all var(--transition-fast);
+      display: flex; flex-direction: column; gap: 16px;
+    }
+    .shipment-card:hover {
+      border-color: var(--color-accent);
+      box-shadow: var(--shadow-hover);
+      transform: translateY(-2px);
+    }
+
+    .sc-header {
+      display: flex; justify-content: space-between; align-items: flex-start;
+    }
+    .sc-id {
+      font-family: var(--font-mono); font-size: 1rem; font-weight: 600;
+      color: var(--color-primary-dark); display: flex; align-items: center; gap: 8px;
+    }
+    .badge {
+      padding: 4px 10px; border-radius: var(--radius-pill);
+      font-size: 0.65rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+    }
+    .badge-transit { background: var(--color-info-bg); color: var(--color-info); }
+    .badge-customs { background: var(--color-warning-bg); color: var(--color-warning); }
+
+    .sc-route {
+      display: flex; align-items: center; gap: 12px;
+      padding: 12px; background: var(--color-bg); border-radius: 16px;
+    }
+    .route-node { flex: 1; }
+    .route-city { font-size: 0.875rem; font-weight: 700; color: var(--color-primary-dark); }
+    .route-code { font-size: 0.75rem; color: var(--color-text-muted); font-family: var(--font-mono); }
+    .route-divider { color: var(--color-text-muted); font-size: 18px; }
+
+    .sc-progress-wrapper { margin-top: auto; }
+    .sc-progress-bar {
+      height: 8px; background: var(--color-border); border-radius: 4px;
+      display: flex; overflow: hidden; margin-bottom: 8px;
+    }
+    .sc-segment { height: 100%; border-right: 2px solid var(--color-surface); }
+    .sc-segment:last-child { border-right: none; }
+    .sc-segment.done { background: var(--color-primary); }
+    .sc-segment.active { background: var(--color-accent); }
+
+    .sc-footer {
+      display: flex; justify-content: space-between; align-items: center;
+      font-size: 0.75rem; font-weight: 600;
+    }
+    .sc-status-text { color: var(--color-primary); }
+    .sc-eta { color: var(--color-text-muted); }
+    .sc-eta span { color: var(--color-primary-dark); font-weight: 700; }
+
+    /* ==========================================================================
+       SIDEBAR (Action Required & Recent)
+       ========================================================================== */
+    .sidebar-section {
+      background: var(--color-surface);
+      border-radius: var(--radius-card);
+      border: 1px solid var(--color-border);
+      padding: 24px;
+      box-shadow: var(--shadow-sm);
+      margin-bottom: 24px;
+    }
+
+    .action-list { display: flex; flex-direction: column; gap: 16px; }
+    .action-item {
+      display: flex; gap: 16px; align-items: flex-start;
+      padding: 16px; border-radius: 16px;
+      background: var(--color-danger-bg);
+      border: 1px solid rgba(239, 68, 68, 0.2);
+    }
+    .action-item.warning { background: var(--color-warning-bg); border-color: rgba(245, 158, 11, 0.2); }
+    
+    .ai-icon { font-size: 20px; color: var(--color-danger); margin-top: 2px; }
+    .action-item.warning .ai-icon { color: var(--color-warning); }
+    
+    .ai-content { flex: 1; }
+    .ai-title { font-size: 0.875rem; font-weight: 700; color: var(--color-primary-dark); margin-bottom: 4px; }
+    .ai-desc { font-size: 0.75rem; color: var(--color-text-muted); margin-bottom: 12px; line-height: 1.4; }
+    .ai-id { font-family: var(--font-mono); font-weight: 600; color: var(--color-primary); }
+    
+    .btn-sm {
+      padding: 6px 12px; border-radius: var(--radius-pill); border: none;
+      font-family: var(--font-sans); font-size: 0.75rem; font-weight: 700;
+      background: var(--color-surface); color: var(--color-primary-dark);
+      cursor: pointer; transition: all var(--transition-fast);
+      box-shadow: var(--shadow-sm);
+    }
+    .btn-sm:hover { box-shadow: var(--shadow-md); transform: translateY(-1px); }
+    .btn-sm.orange { background: var(--color-accent); color: white; }
+
+    /* Recent Deliveries */
+    .recent-list { display: flex; flex-direction: column; }
+    .recent-item {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 16px 0; border-bottom: 1px solid var(--color-border);
+    }
+    .recent-item:last-child { border-bottom: none; padding-bottom: 0; }
+    .ri-info { display: flex; align-items: center; gap: 12px; }
+    .ri-icon {
+      width: 32px; height: 32px; border-radius: 50%;
+      background: var(--color-success-bg); color: var(--color-success);
+      display: flex; align-items: center; justify-content: center; font-size: 16px;
+    }
+    .ri-id { font-family: var(--font-mono); font-size: 0.875rem; font-weight: 600; color: var(--color-primary-dark); }
+    .ri-dest { font-size: 0.75rem; color: var(--color-text-muted); }
+    .ri-date { font-size: 0.75rem; font-weight: 600; color: var(--color-primary); }
+
+    /* ==========================================================================
+       RESPONSIVE
+       ========================================================================== */
+    @media (max-width: 1024px) {
+      .content-grid { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 768px) {
+      .nav-links { display: none; } /* Hide mid links on mobile for prototype */
+      .page-title { font-size: 1.5rem; }
+      .shipments-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="nav-container">
+      <div class="nav-left">
+        <a href="#" class="brand">
+          <div class="brand-icon"><i class="ph ph-globe-hemisphere-east"></i></div>
+          TrackSphere
+        </a>
+        <div class="nav-links">
+          <a href="#" class="nav-link active">Dashboard</a>
+          <a href="#" class="nav-link" onclick="handleViewAll()">Shipments</a>
+          <a href="#" class="nav-link">Documents</a>
+          <a href="#" class="nav-link">Analytics</a>
+        </div>
+      </div>
+      <div class="nav-right">
+        <button class="action-btn" title="Search">
+          <i class="ph ph-magnifying-glass"></i>
+        </button>
+        <button class="action-btn" title="Notifications">
+          <i class="ph ph-bell"></i>
+          <span class="badge-dot"></span>
+        </button>
+        <div class="user-avatar">JD</div>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Main Dashboard -->
+  <main class="dashboard-container">
+    
+    <!-- Header -->
+    <header class="page-header">
+      <h1 class="page-title">Welcome back, John</h1>
+      <p class="page-subtitle">Here is the current status of your global supply chain.</p>
+    </header>
+
+    <!-- KPI Grid -->
+    <div class="kpi-grid">
+      <div class="kpi-card">
+        <div class="kpi-icon navy"><i class="ph-fill ph-package"></i></div>
+        <div class="kpi-content">
+          <div class="kpi-label">Active Shipments</div>
+          <div class="kpi-value">142</div>
+          <div class="kpi-trend trend-up"><i class="ph-bold ph-trend-up"></i> +12 this week</div>
+        </div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-icon orange"><i class="ph-fill ph-warning-circle"></i></div>
+        <div class="kpi-content">
+          <div class="kpi-label">Action Required</div>
+          <div class="kpi-value">3</div>
+          <div class="kpi-trend trend-neutral"><i class="ph-bold ph-minus"></i> 2 documents, 1 exception</div>
+        </div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-icon green"><i class="ph-fill ph-check-circle"></i></div>
+        <div class="kpi-content">
+          <div class="kpi-label">Delivered (30d)</div>
+          <div class="kpi-value">84</div>
+          <div class="kpi-trend trend-up"><i class="ph-bold ph-trend-up"></i> 96% on-time rate</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Content Grid -->
+    <div class="content-grid">
+      
+      <!-- Left Column: Active Shipments -->
+      <div class="main-column">
+        <div class="section-header">
+          <h2 class="section-title">Active Shipments</h2>
+          <button class="btn-text" onclick="handleViewAll()">View All <i class="ph-bold ph-arrow-right"></i></button>
+        </div>
+
+        <div class="shipments-grid">
+          
+          <!-- Card 1 -->
+          <div class="shipment-card" onclick="handleCardClick('TRK-4812-SH')">
+            <div class="sc-header">
+              <div class="sc-id"><i class="ph-fill ph-ship" style="color:var(--color-text-muted)"></i> TRK-4812-SH</div>
+              <div class="badge badge-transit">IN TRANSIT</div>
+            </div>
+            <div class="sc-route">
+              <div class="route-node">
+                <div class="route-city">Shanghai</div>
+                <div class="route-code">CNSHA</div>
+              </div>
+              <div class="route-divider"><i class="ph-bold ph-arrow-right"></i></div>
+              <div class="route-node" style="text-align: right;">
+                <div class="route-city">Los Angeles</div>
+                <div class="route-code">USLAX</div>
+              </div>
+            </div>
+            <div class="sc-progress-wrapper">
+              <div class="sc-progress-bar">
+                <div class="sc-segment done" style="width: 20%;"></div>
+                <div class="sc-segment done" style="width: 20%;"></div>
+                <div class="sc-segment done" style="width: 20%;"></div>
+                <div class="sc-segment active" style="width: 20%;"></div>
+                <div class="sc-segment" style="width: 20%;"></div>
+              </div>
+              <div class="sc-footer">
+                <span class="sc-status-text">Departed Origin Port</span>
+                <span class="sc-eta">ETA: <span>May 22</span></span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Card 2 -->
+          <div class="shipment-card" onclick="handleCardClick('AWB-092-111')">
+            <div class="sc-header">
+              <div class="sc-id"><i class="ph-fill ph-airplane-tilt" style="color:var(--color-text-muted)"></i> AWB-092-111</div>
+              <div class="badge badge-customs">CUSTOMS HOLD</div>
+            </div>
+            <div class="sc-route">
+              <div class="route-node">
+                <div class="route-city">Frankfurt</div>
+                <div class="route-code">FRA</div>
+              </div>
+              <div class="route-divider"><i class="ph-bold ph-arrow-right"></i></div>
+              <div class="route-node" style="text-align: right;">
+                <div class="route-city">Singapore</div>
+                <div class="route-code">SIN</div>
+              </div>
+            </div>
+            <div class="sc-progress-wrapper">
+              <div class="sc-progress-bar">
+                <div class="sc-segment done" style="width: 25%;"></div>
+                <div class="sc-segment done" style="width: 25%;"></div>
+                <div class="sc-segment done" style="width: 25%;"></div>
+                <div class="sc-segment active" style="width: 25%; background: var(--color-warning);"></div>
+              </div>
+              <div class="sc-footer">
+                <span class="sc-status-text" style="color: var(--color-warning)">Pending Clearance</span>
+                <span class="sc-eta">ETA: <span>Pending</span></span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Card 3 -->
+          <div class="shipment-card" onclick="handleCardClick('TRK-9921-EU')">
+            <div class="sc-header">
+              <div class="sc-id"><i class="ph-fill ph-truck" style="color:var(--color-text-muted)"></i> TRK-9921-EU</div>
+              <div class="badge badge-transit">IN TRANSIT</div>
+            </div>
+            <div class="sc-route">
+              <div class="route-node">
+                <div class="route-city">Rotterdam</div>
+                <div class="route-code">NLRTM</div>
+              </div>
+              <div class="route-divider"><i class="ph-bold ph-arrow-right"></i></div>
+              <div class="route-node" style="text-align: right;">
+                <div class="route-city">Munich</div>
+                <div class="route-code">DEMUC</div>
+              </div>
+            </div>
+            <div class="sc-progress-wrapper">
+              <div class="sc-progress-bar">
+                <div class="sc-segment done" style="width: 33%;"></div>
+                <div class="sc-segment active" style="width: 33%;"></div>
+                <div class="sc-segment" style="width: 34%;"></div>
+              </div>
+              <div class="sc-footer">
+                <span class="sc-status-text">Out for Delivery</span>
+                <span class="sc-eta">ETA: <span>Today</span></span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Card 4 -->
+          <div class="shipment-card" onclick="handleCardClick('TRK-1045-AF')">
+            <div class="sc-header">
+              <div class="sc-id"><i class="ph-fill ph-ship" style="color:var(--color-text-muted)"></i> TRK-1045-AF</div>
+              <div class="badge badge-transit" style="background:#F3F4F6;color:var(--color-text-muted);">BOOKED</div>
+            </div>
+            <div class="sc-route">
+              <div class="route-node">
+                <div class="route-city">Lagos</div>
+                <div class="route-code">NGLOS</div>
+              </div>
+              <div class="route-divider"><i class="ph-bold ph-arrow-right"></i></div>
+              <div class="route-node" style="text-align: right;">
+                <div class="route-city">London</div>
+                <div class="route-code">GBLON</div>
+              </div>
+            </div>
+            <div class="sc-progress-wrapper">
+              <div class="sc-progress-bar">
+                <div class="sc-segment active" style="width: 20%; background:var(--color-primary-dark);"></div>
+                <div class="sc-segment" style="width: 20%;"></div>
+                <div class="sc-segment" style="width: 20%;"></div>
+                <div class="sc-segment" style="width: 20%;"></div>
+                <div class="sc-segment" style="width: 20%;"></div>
+              </div>
+              <div class="sc-footer">
+                <span class="sc-status-text">Awaiting Pickup</span>
+                <span class="sc-eta">ETA: <span>Jun 12</span></span>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Right Column: Sidebar -->
+      <div class="sidebar-column">
+        
+        <!-- Action Required Section -->
+        <div class="sidebar-section">
+          <h2 class="section-title" style="margin-bottom: 16px;">Action Required</h2>
+          
+          <div class="action-list">
+            <!-- Danger Item -->
+            <div class="action-item">
+              <i class="ph-fill ph-file-dashed ai-icon"></i>
+              <div class="ai-content">
+                <div class="ai-title">Missing Commercial Invoice</div>
+                <div class="ai-desc">Customs clearance blocked for <span class="ai-id">AWB-092-111</span>. Please upload the invoice to proceed.</div>
+                <button class="btn-sm orange" onclick="alert('Opening Document Upload Modal...')">Upload Document</button>
+              </div>
+            </div>
+            
+            <!-- Warning Item -->
+            <div class="action-item warning">
+              <i class="ph-fill ph-warning-circle ai-icon"></i>
+              <div class="ai-content">
+                <div class="ai-title">Carrier Exception Flagged</div>
+                <div class="ai-desc">Vessel delay reported for <span class="ai-id">TRK-2290-JP</span>. ETA revised by +3 days.</div>
+                <button class="btn-sm" onclick="handleCardClick('TRK-2290-JP')">View Details</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Recent Deliveries Section -->
+        <div class="sidebar-section">
+          <h2 class="section-title" style="margin-bottom: 8px;">Recent Deliveries</h2>
+          
+          <div class="recent-list">
+            <div class="recent-item">
+              <div class="ri-info">
+                <div class="ri-icon"><i class="ph-bold ph-check"></i></div>
+                <div>
+                  <div class="ri-id">TRK-8820-NA</div>
+                  <div class="ri-dest">To: New York, US</div>
+                </div>
+              </div>
+              <div class="ri-date">Today</div>
+            </div>
+            
+            <div class="recent-item">
+              <div class="ri-info">
+                <div class="ri-icon"><i class="ph-bold ph-check"></i></div>
+                <div>
+                  <div class="ri-id">TRK-8711-EU</div>
+                  <div class="ri-dest">To: Paris, FR</div>
+                </div>
+              </div>
+              <div class="ri-date">Yesterday</div>
+            </div>
+
+            <div class="recent-item">
+              <div class="ri-info">
+                <div class="ri-icon"><i class="ph-bold ph-check"></i></div>
+                <div>
+                  <div class="ri-id">AWB-090-442</div>
+                  <div class="ri-dest">To: Dubai, AE</div>
+                </div>
+              </div>
+              <div class="ri-date">May 14</div>
+            </div>
+          </div>
+          
+          <button class="btn-text" style="margin-top: 16px; width: 100%; justify-content: center;" onclick="handleViewAll()">
+            View All History
+          </button>
+        </div>
+
+      </div>
+    </div>
+
+  </main>
+
+  <!-- ==========================================================================
+       INTERACTIVE LOGIC
+       ========================================================================== -->
+  <script>
+    // Action 1: Click on a Shipment Card ➔ Navigates to Shipment Detail Page.
+    function handleCardClick(trackingId) {
+      alert(`Action: Navigating to Shipment Detail Page for [${trackingId}]\n\n(This would load the detailed timeline, map, and document view).`);
+      // Production code:
+      // window.location.href = `/portal/shipments/${trackingId}`;
+    }
+
+    // Action 2: Click "View All" ➔ Navigates to Shipment List.
+    function handleViewAll() {
+      alert(`Action: Navigating to Shipment List (Grid/Table View)\n\n(This opens the filterable table of all historical and active shipments).`);
+      // Production code:
+      // window.location.href = '/portal/shipments';
+    }
+  </script>
+</body>
+</html>

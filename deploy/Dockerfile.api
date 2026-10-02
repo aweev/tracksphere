@@ -1,0 +1,31 @@
+# ── TrackSphere API/worker image ────────────────────────────────────────
+# One image, two commands (api | worker) — see deploy/docker-compose.yml.
+# Migrations are embedded in the binary (internal/db/migrations via go:embed)
+# so no separate migration artifact is needed.
+FROM golang:1.26-alpine AS build
+WORKDIR /src
+
+# Cache module downloads separately from source changes.
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY cmd ./cmd
+COPY internal ./internal
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/api ./cmd/api \
+ && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/worker ./cmd/worker \
+ && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/migrate ./cmd/migrate \
+ && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/seed ./cmd/seed \
+ && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/keygen ./cmd/keygen
+
+# ── Runtime: distroless-ish minimal alpine with CA certs + wget healthcheck
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates tzdata wget \
+ && adduser -D -u 10001 track \
+ && mkdir -p /app && chown -R track /app
+WORKDIR /app
+COPY --from=build /out/ /app/
+USER track
+EXPOSE 8080
+HEALTHCHECK --interval=15s --timeout=3s --start-period=20s --retries=5 \
+  CMD wget -qO- http://127.0.0.1:8080/api/v1/health >/dev/null 2>&1 || exit 1
+ENTRYPOINT ["/app/api"]

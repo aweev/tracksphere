@@ -1,0 +1,53 @@
+@import 'tailwindcss';
+
+/* TrackSphere brand tokens (from design/prototypes Control Tower kit) */
+@theme {
+  --color-navy-950: #0f172a;
+  --color-navy-900: #1e293b;
+  --color-navy-800: #334155;
+  --color-accent-500: #ff6b00;
+  --color-accent-600: #e66000;
+  --font-sans: 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+}
+
+html,
+body,
+#__next {
+  height: 100%;
+}
+
+body {
+  @apply bg-slate-100 text-slate-900 font-sans antialiased;
+}
+
+/* Status pill palette shared by badges across pages */
+.status-pill {
+  @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-semibold;
+}
+.status-booked {
+  @apply bg-slate-200 text-slate-700;
+}
+.status-in_transit {
+  @apply bg-blue-100 text-blue-700;
+}
+.status-at_customs {
+  @apply bg-amber-100 text-amber-800;
+}
+.status-out_for_delivery {
+  @apply bg-violet-100 text-violet-700;
+}
+.status-delivered {
+  @apply bg-emerald-100 text-emerald-700;
+}
+.status-exception {
+  @apply bg-red-100 text-red-700;
+}
+.status-cancelled {
+  @apply bg-slate-300 text-slate-600;
+}
+
+/* MapLibre popup polish */
+.maplibregl-popup-content {
+  @apply rounded-xl px-3 py-2 font-sans text-xs shadow-lg;
+}

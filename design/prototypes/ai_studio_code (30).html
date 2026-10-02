@@ -1,0 +1,681 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>All Shipments | TrackSphere Customer Portal</title>
+  
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  
+  <!-- Phosphor Icons -->
+  <script src="https://unpkg.com/@phosphor-icons/web"></script>
+
+  <style>
+    /* ==========================================================================
+       TRACKSPHERE BRAND KIT & CSS VARIABLES
+       ========================================================================== */
+    :root {
+      /* Colors */
+      --color-bg: #F3F4F6;
+      --color-surface: #FFFFFF;
+      --color-primary: #1E293B; /* Deep Navy */
+      --color-primary-dark: #0F172A;
+      --color-accent: #FF6B00; /* Action Orange */
+      --color-accent-hover: #E66000;
+      
+      /* Semantic Colors */
+      --color-success: #10B981;
+      --color-success-bg: #D1FAE5;
+      --color-warning: #F59E0B;
+      --color-warning-bg: #FEF3C7;
+      --color-danger: #EF4444;
+      --color-info: #3B82F6;
+      --color-info-bg: #DBEAFE;
+      --color-neutral-bg: #F3F4F6;
+      
+      /* Text & Borders */
+      --color-text-main: #111827;
+      --color-text-muted: #6B7280;
+      --color-border: #E5E7EB;
+      
+      /* Typography */
+      --font-sans: 'Plus Jakarta Sans', sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+      
+      /* Radii */
+      --radius-card: 24px;
+      --radius-pill: 999px;
+      --radius-sm: 8px;
+      
+      /* Shadows */
+      --shadow-sm: 0 2px 4px rgba(0,0,0,0.02);
+      --shadow-md: 0 4px 12px rgba(0,0,0,0.04);
+      --shadow-drawer: -8px 0 24px rgba(15, 23, 42, 0.15);
+      
+      /* Transitions */
+      --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+      --transition-drawer: 300ms cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: var(--font-sans);
+      background-color: var(--color-bg);
+      color: var(--color-text-main);
+      -webkit-font-smoothing: antialiased;
+      line-height: 1.5;
+    }
+
+    /* ==========================================================================
+       TOP NAVIGATION
+       ========================================================================== */
+    .top-nav {
+      background-color: var(--color-surface);
+      border-bottom: 1px solid var(--color-border);
+      position: sticky;
+      top: 0;
+      z-index: 50;
+    }
+
+    .nav-container {
+      max-width: 1440px;
+      margin: 0 auto;
+      padding: 0 24px;
+      height: 72px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .nav-left { display: flex; align-items: center; gap: 40px; }
+    
+    .brand {
+      display: flex; align-items: center; gap: 10px;
+      font-weight: 700; font-size: 1.125rem; color: var(--color-primary-dark);
+      text-decoration: none;
+    }
+    .brand-icon {
+      width: 32px; height: 32px;
+      background-color: var(--color-primary); color: white;
+      border-radius: 8px; display: flex; align-items: center; justify-content: center;
+      font-size: 18px;
+    }
+
+    .nav-links { display: flex; gap: 8px; }
+    .nav-link {
+      padding: 8px 16px;
+      border-radius: var(--radius-pill);
+      color: var(--color-text-muted);
+      font-weight: 600;
+      font-size: 0.875rem;
+      text-decoration: none;
+      transition: all var(--transition-fast);
+    }
+    .nav-link:hover { color: var(--color-primary); background: var(--color-bg); }
+    .nav-link.active { color: var(--color-surface); background: var(--color-primary); }
+
+    .nav-right { display: flex; align-items: center; gap: 16px; }
+    .user-avatar {
+      width: 40px; height: 40px; border-radius: 50%;
+      background: var(--color-accent-hover); color: white;
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 700; font-size: 0.875rem;
+    }
+
+    /* ==========================================================================
+       PAGE LAYOUT & HEADER
+       ========================================================================== */
+    .page-container {
+      max-width: 1440px;
+      margin: 0 auto;
+      padding: 32px 24px 64px;
+    }
+
+    .page-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      margin-bottom: 24px;
+      flex-wrap: wrap;
+      gap: 16px;
+    }
+
+    .page-title {
+      font-size: 1.75rem;
+      font-weight: 800;
+      color: var(--color-primary-dark);
+      letter-spacing: -0.02em;
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    /* Search Input */
+    .search-box {
+      position: relative;
+      width: 300px;
+    }
+    .search-box i {
+      position: absolute;
+      left: 16px; top: 50%; transform: translateY(-50%);
+      color: var(--color-text-muted);
+    }
+    .search-box input {
+      width: 100%;
+      padding: 10px 16px 10px 40px;
+      border-radius: var(--radius-pill);
+      border: 1px solid var(--color-border);
+      font-family: var(--font-sans);
+      font-size: 0.875rem;
+      outline: none;
+      transition: border-color var(--transition-fast);
+    }
+    .search-box input:focus {
+      border-color: var(--color-accent);
+      box-shadow: 0 0 0 3px rgba(255, 107, 0, 0.1);
+    }
+
+    /* Buttons */
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+      font-family: var(--font-sans); font-weight: 600; font-size: 0.875rem;
+      padding: 10px 20px; border-radius: var(--radius-pill); border: none;
+      cursor: pointer; transition: all var(--transition-fast);
+    }
+    .btn-outline {
+      background-color: var(--color-surface);
+      color: var(--color-primary);
+      border: 1px solid var(--color-border);
+    }
+    .btn-outline:hover { border-color: var(--color-text-muted); }
+    
+    .btn-primary {
+      background-color: var(--color-primary);
+      color: var(--color-surface);
+    }
+    .btn-primary:hover { background-color: var(--color-primary-dark); }
+    
+    /* Filter Pills */
+    .filter-pills {
+      display: flex; gap: 8px; margin-bottom: 24px;
+      overflow-x: auto; padding-bottom: 4px; /* for scrollbars on mobile */
+    }
+    .filter-pill {
+      padding: 6px 16px;
+      border-radius: var(--radius-pill);
+      font-size: 0.875rem; font-weight: 600;
+      color: var(--color-text-muted);
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      cursor: pointer; white-space: nowrap;
+      transition: all var(--transition-fast);
+    }
+    .filter-pill:hover { border-color: var(--color-text-muted); color: var(--color-primary); }
+    .filter-pill.active { background: var(--color-primary); color: var(--color-surface); border-color: var(--color-primary); }
+
+    /* ==========================================================================
+       DATA TABLE
+       ========================================================================== */
+    .table-card {
+      background: var(--color-surface);
+      border-radius: var(--radius-card);
+      border: 1px solid var(--color-border);
+      box-shadow: var(--shadow-sm);
+      overflow: hidden;
+    }
+    .table-responsive {
+      overflow-x: auto;
+      width: 100%;
+    }
+    
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+    }
+    th {
+      padding: 16px 24px;
+      font-size: 0.75rem;
+      font-weight: 700;
+      color: var(--color-text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      border-bottom: 1px solid var(--color-border);
+      background: #F8FAFC;
+    }
+    td {
+      padding: 20px 24px;
+      border-bottom: 1px solid var(--color-border);
+      vertical-align: middle;
+      font-size: 0.875rem;
+    }
+    
+    tbody tr {
+      transition: background-color var(--transition-fast);
+      cursor: pointer;
+    }
+    tbody tr:hover {
+      background-color: var(--color-bg);
+    }
+    tbody tr:last-child td {
+      border-bottom: none;
+    }
+
+    /* Table Cells Formats */
+    .cell-id {
+      font-family: var(--font-mono);
+      font-weight: 600;
+      color: var(--color-primary-dark);
+    }
+    .cell-route {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 600;
+      color: var(--color-primary);
+    }
+    .cell-route i { color: var(--color-text-muted); }
+    
+    .cell-carrier {
+      display: flex; align-items: center; gap: 8px;
+    }
+    .carrier-icon {
+      width: 24px; height: 24px; border-radius: 6px;
+      background: var(--color-bg); color: var(--color-primary);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 14px;
+    }
+
+    /* Badges */
+    .badge {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 6px 12px; border-radius: var(--radius-pill);
+      font-size: 0.65rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em;
+    }
+    .badge-transit { background: var(--color-info-bg); color: var(--color-info); }
+    .badge-customs { background: var(--color-warning-bg); color: var(--color-warning); }
+    .badge-success { background: var(--color-success-bg); color: var(--color-success); }
+    .badge-booked { background: var(--color-neutral-bg); color: var(--color-text-muted); }
+    .dot { width: 6px; height: 6px; border-radius: 50%; }
+
+    /* Pagination (Footer of table) */
+    .table-footer {
+      padding: 16px 24px;
+      border-top: 1px solid var(--color-border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: var(--color-surface);
+      font-size: 0.875rem;
+      color: var(--color-text-muted);
+    }
+    .pagination { display: flex; gap: 4px; }
+    .page-btn {
+      width: 32px; height: 32px; border-radius: var(--radius-sm);
+      border: 1px solid transparent; background: transparent;
+      display: flex; align-items: center; justify-content: center;
+      color: var(--color-text-muted); cursor: pointer; font-family: var(--font-sans);
+    }
+    .page-btn:hover { background: var(--color-bg); }
+    .page-btn.active { background: var(--color-primary); color: white; border-color: var(--color-primary); }
+
+    /* ==========================================================================
+       ADVANCED FILTER DRAWER
+       ========================================================================== */
+    .drawer-overlay {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(15, 23, 42, 0.3);
+      backdrop-filter: blur(2px);
+      z-index: 100;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity var(--transition-drawer);
+    }
+    .drawer-overlay.open {
+      opacity: 1; pointer-events: auto;
+    }
+    
+    .drawer-content {
+      position: absolute;
+      top: 0; right: 0; bottom: 0;
+      width: 440px;
+      background: var(--color-surface);
+      box-shadow: var(--shadow-drawer);
+      transform: translateX(100%);
+      transition: transform var(--transition-drawer);
+      display: flex; flex-direction: column;
+    }
+    .drawer-overlay.open .drawer-content {
+      transform: translateX(0);
+    }
+
+    .drawer-header {
+      padding: 24px;
+      border-bottom: 1px solid var(--color-border);
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .drawer-title { font-size: 1.25rem; font-weight: 700; color: var(--color-primary-dark); }
+    .btn-close {
+      background: none; border: none; font-size: 24px; color: var(--color-text-muted);
+      cursor: pointer; padding: 4px; border-radius: 50%; transition: background var(--transition-fast);
+    }
+    .btn-close:hover { background: var(--color-bg); color: var(--color-primary); }
+
+    .drawer-body {
+      flex: 1; overflow-y: auto; padding: 24px;
+    }
+
+    /* Form inside Drawer */
+    .filter-section { margin-bottom: 32px; }
+    .filter-label {
+      font-size: 0.875rem; font-weight: 700; color: var(--color-primary);
+      margin-bottom: 16px; display: block;
+    }
+
+    /* Custom Checkboxes */
+    .checkbox-group { display: flex; flex-direction: column; gap: 12px; }
+    .checkbox-label {
+      display: flex; align-items: center; gap: 12px;
+      font-size: 0.875rem; color: var(--color-text-main); cursor: pointer;
+    }
+    .checkbox-input {
+      appearance: none; width: 20px; height: 20px; border: 2px solid var(--color-border);
+      border-radius: 6px; cursor: pointer; position: relative; transition: all 100ms;
+    }
+    .checkbox-input:checked {
+      background-color: var(--color-accent); border-color: var(--color-accent);
+    }
+    .checkbox-input:checked::after {
+      content: ''; position: absolute; left: 5px; top: 1px; width: 5px; height: 10px;
+      border: solid white; border-width: 0 2px 2px 0; transform: rotate(45deg);
+    }
+
+    /* Custom Select/Inputs */
+    .form-input {
+      width: 100%; padding: 12px 16px; border-radius: 12px;
+      border: 1px solid var(--color-border); font-family: var(--font-sans);
+      font-size: 0.875rem; color: var(--color-primary); outline: none;
+    }
+    .form-input:focus { border-color: var(--color-accent); }
+
+    .drawer-footer {
+      padding: 24px; border-top: 1px solid var(--color-border);
+      display: flex; gap: 12px; background: #F8FAFC;
+    }
+    .drawer-footer .btn { flex: 1; }
+
+    /* ==========================================================================
+       RESPONSIVE
+       ========================================================================== */
+    @media (max-width: 768px) {
+      .header-actions { width: 100%; justify-content: space-between; }
+      .search-box { width: 100%; order: 3; margin-top: 8px; }
+      .drawer-content { width: 100%; }
+      .nav-links { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <div class="nav-container">
+      <div class="nav-left">
+        <a href="#" class="brand">
+          <div class="brand-icon"><i class="ph ph-globe-hemisphere-east"></i></div>
+          TrackSphere
+        </a>
+        <div class="nav-links">
+          <a href="#" class="nav-link">Dashboard</a>
+          <a href="#" class="nav-link active">Shipments</a>
+          <a href="#" class="nav-link">Documents</a>
+          <a href="#" class="nav-link">Analytics</a>
+        </div>
+      </div>
+      <div class="nav-right">
+        <div class="user-avatar">JD</div>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Main Content -->
+  <main class="page-container">
+    
+    <!-- Header Area -->
+    <header class="page-header">
+      <h1 class="page-title">All Shipments</h1>
+      
+      <div class="header-actions">
+        <div class="search-box">
+          <i class="ph ph-magnifying-glass"></i>
+          <input type="text" placeholder="Search tracking ID, port, or carrier...">
+        </div>
+        <button class="btn btn-outline" onclick="handleExport()">
+          <i class="ph ph-download-simple"></i> Export
+        </button>
+        <button class="btn btn-primary" onclick="openDrawer()">
+          <i class="ph ph-faders"></i> Filter
+        </button>
+      </div>
+    </header>
+
+    <!-- Quick Filters -->
+    <div class="filter-pills">
+      <button class="filter-pill active">All Shipments</button>
+      <button class="filter-pill">In Transit (142)</button>
+      <button class="filter-pill">Exceptions (3)</button>
+      <button class="filter-pill">Delivered (84)</button>
+    </div>
+
+    <!-- Data Table -->
+    <div class="table-card">
+      <div class="table-responsive">
+        <table>
+          <thead>
+            <tr>
+              <th>Tracking ID</th>
+              <th>Route</th>
+              <th>Carrier</th>
+              <th>Status</th>
+              <th>Date / ETA</th>
+            </tr>
+          </thead>
+          <tbody>
+            <!-- Row 1 -->
+            <tr onclick="handleRowClick('TRK-4812-SH')">
+              <td class="cell-id">TRK-4812-SH</td>
+              <td class="cell-route">Shanghai <i class="ph-bold ph-arrow-right"></i> Los Angeles</td>
+              <td class="cell-carrier">
+                <div class="carrier-icon"><i class="ph-fill ph-ship"></i></div> MSC
+              </td>
+              <td><div class="badge badge-transit"><div class="dot" style="background:var(--color-info)"></div> IN TRANSIT</div></td>
+              <td style="color:var(--color-text-muted)">May 22, 2026</td>
+            </tr>
+
+            <!-- Row 2 -->
+            <tr onclick="handleRowClick('AWB-092-111')">
+              <td class="cell-id">AWB-092-111</td>
+              <td class="cell-route">Frankfurt <i class="ph-bold ph-arrow-right"></i> Singapore</td>
+              <td class="cell-carrier">
+                <div class="carrier-icon"><i class="ph-fill ph-airplane-tilt"></i></div> DHL
+              </td>
+              <td><div class="badge badge-customs"><div class="dot" style="background:var(--color-warning)"></div> CUSTOMS HOLD</div></td>
+              <td style="color:var(--color-warning); font-weight:600;">Pending</td>
+            </tr>
+
+            <!-- Row 3 -->
+            <tr onclick="handleRowClick('TRK-9921-EU')">
+              <td class="cell-id">TRK-9921-EU</td>
+              <td class="cell-route">Rotterdam <i class="ph-bold ph-arrow-right"></i> Munich</td>
+              <td class="cell-carrier">
+                <div class="carrier-icon"><i class="ph-fill ph-truck"></i></div> Maersk Logistics
+              </td>
+              <td><div class="badge badge-transit"><div class="dot" style="background:var(--color-info)"></div> IN TRANSIT</div></td>
+              <td style="color:var(--color-primary); font-weight:600;">Today</td>
+            </tr>
+
+            <!-- Row 4 -->
+            <tr onclick="handleRowClick('TRK-1045-AF')">
+              <td class="cell-id">TRK-1045-AF</td>
+              <td class="cell-route">Lagos <i class="ph-bold ph-arrow-right"></i> London</td>
+              <td class="cell-carrier">
+                <div class="carrier-icon"><i class="ph-fill ph-ship"></i></div> CMA CGM
+              </td>
+              <td><div class="badge badge-booked"><div class="dot" style="background:var(--color-text-muted)"></div> BOOKED</div></td>
+              <td style="color:var(--color-text-muted)">Jun 12, 2026</td>
+            </tr>
+
+            <!-- Row 5 -->
+            <tr onclick="handleRowClick('AWB-8820-NA')">
+              <td class="cell-id">AWB-8820-NA</td>
+              <td class="cell-route">Shenzhen <i class="ph-bold ph-arrow-right"></i> New York</td>
+              <td class="cell-carrier">
+                <div class="carrier-icon"><i class="ph-fill ph-airplane-tilt"></i></div> FedEx
+              </td>
+              <td><div class="badge badge-success"><div class="dot" style="background:var(--color-success)"></div> DELIVERED</div></td>
+              <td style="color:var(--color-text-muted)">May 15, 2026</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      
+      <!-- Pagination -->
+      <div class="table-footer">
+        <div>Showing 1 - 5 of 229 shipments</div>
+        <div class="pagination">
+          <button class="page-btn"><i class="ph-bold ph-caret-left"></i></button>
+          <button class="page-btn active">1</button>
+          <button class="page-btn">2</button>
+          <button class="page-btn">3</button>
+          <button class="page-btn">...</button>
+          <button class="page-btn"><i class="ph-bold ph-caret-right"></i></button>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- ==========================================================================
+       ADVANCED FILTER DRAWER (Slide-out)
+       ========================================================================== -->
+  <div class="drawer-overlay" id="filterDrawer">
+    <div class="drawer-content">
+      
+      <div class="drawer-header">
+        <h2 class="drawer-title">Advanced Filters</h2>
+        <button class="btn-close" onclick="closeDrawer()"><i class="ph ph-x"></i></button>
+      </div>
+
+      <div class="drawer-body">
+        <!-- Status Filter -->
+        <div class="filter-section">
+          <span class="filter-label">Shipment Status</span>
+          <div class="checkbox-group">
+            <label class="checkbox-label"><input type="checkbox" class="checkbox-input" checked> In Transit</label>
+            <label class="checkbox-label"><input type="checkbox" class="checkbox-input" checked> Booked</label>
+            <label class="checkbox-label"><input type="checkbox" class="checkbox-input"> Delivered</label>
+            <label class="checkbox-label"><input type="checkbox" class="checkbox-input"> Customs Hold</label>
+            <label class="checkbox-label"><input type="checkbox" class="checkbox-input"> Delayed</label>
+          </div>
+        </div>
+
+        <!-- Mode / Carrier Filter -->
+        <div class="filter-section">
+          <span class="filter-label">Transport Mode</span>
+          <div class="checkbox-group">
+            <label class="checkbox-label"><input type="checkbox" class="checkbox-input"> Ocean Freight</label>
+            <label class="checkbox-label"><input type="checkbox" class="checkbox-input"> Air Freight</label>
+            <label class="checkbox-label"><input type="checkbox" class="checkbox-input"> Road / Rail</label>
+          </div>
+        </div>
+
+        <!-- Lane Filter -->
+        <div class="filter-section">
+          <span class="filter-label">Trade Lane</span>
+          <div style="display: flex; gap: 12px; align-items: center;">
+            <input type="text" class="form-input" placeholder="Origin (e.g. SHA)">
+            <i class="ph-bold ph-arrow-right" style="color:var(--color-text-muted)"></i>
+            <input type="text" class="form-input" placeholder="Dest (e.g. LAX)">
+          </div>
+        </div>
+        
+        <!-- Date Filter -->
+        <div class="filter-section">
+          <span class="filter-label">Date Range (ETA)</span>
+          <select class="form-input" style="appearance: auto;">
+            <option>Next 7 Days</option>
+            <option>Next 30 Days</option>
+            <option>Past 30 Days</option>
+            <option>Custom Range...</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="drawer-footer">
+        <button class="btn btn-outline" onclick="closeDrawer()">Clear All</button>
+        <button class="btn btn-primary" onclick="applyFilters()">Apply Filters</button>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ==========================================================================
+       INTERACTIVE LOGIC
+       ========================================================================== -->
+  <script>
+    // Action 1: Click a row ➔ Navigates to Shipment Detail Page.
+    function handleRowClick(trackingId) {
+      alert(`Action: Navigating to Shipment Detail Page for [${trackingId}]\n\n(This opens the detailed view with timeline and documents)`);
+      // Production code:
+      // window.location.href = `/portal/shipments/${trackingId}`;
+    }
+
+    // Action 2: Click "Export" ➔ Triggers CSV download.
+    function handleExport() {
+      alert(`Action: Triggering CSV Download\n\n(Generating CSV for the currently filtered view...)`);
+      // Production logic would trigger a blob download here.
+    }
+
+    // --- Drawer Logic ---
+    const drawer = document.getElementById('filterDrawer');
+
+    function openDrawer() {
+      drawer.classList.add('open');
+      document.body.style.overflow = 'hidden'; // Prevent background scrolling
+    }
+
+    function closeDrawer() {
+      drawer.classList.remove('open');
+      document.body.style.overflow = 'auto';
+    }
+
+    function applyFilters() {
+      // Logic to gather filter state and re-render table goes here.
+      closeDrawer();
+      alert('Filters applied. Table data refreshed.');
+    }
+
+    // Close drawer when clicking outside the content area (on the overlay)
+    drawer.addEventListener('click', function(e) {
+      if (e.target === this) {
+        closeDrawer();
+      }
+    });
+
+    // Handle Quick Filter active states (UI only)
+    document.querySelectorAll('.filter-pill').forEach(pill => {
+      pill.addEventListener('click', function() {
+        document.querySelectorAll('.filter-pill').forEach(p => p.classList.remove('active'));
+        this.classList.add('active');
+      });
+    });
+  </script>
+</body>
+</html>

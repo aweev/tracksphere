@@ -1,0 +1,31 @@
+# ── TrackSphere web (Next.js) image ─────────────────────────────────────
+# API_BASE_URL is baked at build time (Next rewrites live in the route
+# manifest) — see docs/adr/0006.
+FROM node:22-alpine AS deps
+WORKDIR /app
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+
+FROM node:22-alpine AS build
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY web/ ./
+ARG API_BASE_URL=http://api:8080
+ENV API_BASE_URL=${API_BASE_URL}
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN npm run build
+
+FROM node:22-alpine AS runtime
+WORKDIR /app
+RUN adduser -D -u 10001 nextjs
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+# Standalone output ships only the server + traced deps.
+COPY --from=build --chown=nextjs:nextjs /app/.next/standalone ./
+COPY --from=build --chown=nextjs:nextjs /app/.next/static ./.next/static
+USER nextjs
+EXPOSE 3000
+ENV PORT=3000 HOSTNAME=0.0.0.0
+HEALTHCHECK --interval=15s --timeout=3s --start-period=15s --retries=5 \
+  CMD wget -qO- http://127.0.0.1:3000/login >/dev/null 2>&1 || exit 1
+CMD ["node", "server.js"]

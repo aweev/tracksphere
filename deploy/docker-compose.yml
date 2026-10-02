@@ -1,0 +1,87 @@
+# ── TrackSphere local/production stack (Hetzner / DigitalOcean friendly) ──
+# Deliberately plain Docker Compose: no k8s, no Redis, no NATS, no ClickHouse
+# — Postgres is the single datastore and the job queue (docs/adr/0003).
+#
+#   cd deploy && cp .env.example .env && docker compose up -d --build
+#   docker compose exec api /app/seed        # optional demo data
+#
+# Resource note: whole stack fits in ~2 vCPU / 4 GB RAM (a CPX21/CPX31).
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-tracksphere}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-tracksphere}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      # Bind to loopback only: the DB must never be publicly reachable.
+      - '127.0.0.1:5433:5432'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-tracksphere} -d ${POSTGRES_DB:-tracksphere}']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      TRACKSPHERE_ENV: ${TRACKSPHERE_ENV:-production}
+      TRACKSPHERE_HTTP_ADDR: ':8080'
+      TRACKSPHERE_CORS_ORIGINS: ${TRACKSPHERE_CORS_ORIGINS:-}
+      # App runs as the RESTRICTED role; migrations run as the owner.
+      TRACKSPHERE_DATABASE_URL: postgres://tracksphere_app:${APP_DB_PASSWORD:?set APP_DB_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-tracksphere}?sslmode=disable
+      TRACKSPHERE_MIGRATIONS_URL: postgres://${POSTGRES_USER:-tracksphere}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-tracksphere}?sslmode=disable
+      TRACKSPHERE_AUTO_MIGRATE: '1'
+      TRACKSPHERE_SECRET_KEY: ${TRACKSPHERE_SECRET_KEY:?set TRACKSPHERE_SECRET_KEY in .env}
+      TRACKSPHERE_CARRIER_WEBHOOK_SECRET: ${TRACKSPHERE_CARRIER_WEBHOOK_SECRET:?set in .env}
+      TRACKSPHERE_LOG_LEVEL: ${TRACKSPHERE_LOG_LEVEL:-info}
+      TRACKSPHERE_SESSION_TTL_HOURS: ${TRACKSPHERE_SESSION_TTL_HOURS:-168}
+    ports:
+      - '127.0.0.1:8080:8080'
+
+  worker:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        # Worker waits for the API to migrate the schema first.
+        condition: service_healthy
+    command: ['/app/worker']
+    environment:
+      TRACKSPHERE_ENV: ${TRACKSPHERE_ENV:-production}
+      TRACKSPHERE_DATABASE_URL: postgres://tracksphere_app:${APP_DB_PASSWORD}@postgres:5432/${POSTGRES_DB:-tracksphere}?sslmode=disable
+      TRACKSPHERE_AUTO_MIGRATE: '0'
+      TRACKSPHERE_SECRET_KEY: ${TRACKSPHERE_SECRET_KEY}
+      TRACKSPHERE_CARRIER_WEBHOOK_SECRET: ${TRACKSPHERE_CARRIER_WEBHOOK_SECRET}
+      TRACKSPHERE_WORKER_CONCURRENCY: ${TRACKSPHERE_WORKER_CONCURRENCY:-4}
+      TRACKSPHERE_LOG_LEVEL: ${TRACKSPHERE_LOG_LEVEL:-info}
+
+  web:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.web
+      args:
+        API_BASE_URL: http://api:8080
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - '${WEB_PORT:-3000}:3000'
+
+volumes:
+  pgdata:

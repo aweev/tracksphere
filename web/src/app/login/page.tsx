@@ -1,0 +1,140 @@
+'use client';
+
+import { useState, type FormEvent } from 'react';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { useAuth } from '@/lib/auth';
+import { RequestError } from '@/lib/api';
+
+export default function LoginPage() {
+  const { login, verifyMfa, challenge, clearChallenge } = useAuth();
+  const router = useRouter();
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [code, setCode] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const onSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setBusy(true);
+    try {
+      const result = await login(email, password);
+      if (result === 'ok') router.push('/');
+    } catch (err) {
+      setError(err instanceof RequestError ? err.message : 'Sign in failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onMfa = async (e: FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setBusy(true);
+    try {
+      await verifyMfa(code);
+      router.push('/');
+    } catch (err) {
+      setError(err instanceof RequestError ? err.message : 'Verification failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="flex h-full items-center justify-center bg-navy-950 p-4">
+      <div className="w-full max-w-md rounded-3xl bg-white p-8 shadow-2xl">
+        <div className="mb-6 text-center">
+          <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-xl bg-accent-500 text-lg font-bold text-white">
+            T
+          </div>
+          <h1 className="text-xl font-extrabold text-navy-950">
+            Track<span className="text-accent-500">Sphere</span>
+          </h1>
+          <p className="mt-1 text-sm text-slate-500">Sign in to the control tower</p>
+        </div>
+
+        {challenge ? (
+          <form onSubmit={onMfa} className="space-y-4">
+            <p className="rounded-xl bg-amber-50 p-3 text-sm text-amber-800">
+              Two-factor verification required. Enter the 6-digit code from your authenticator app.
+            </p>
+            <input
+              autoFocus
+              inputMode="numeric"
+              maxLength={6}
+              value={code}
+              onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
+              placeholder="123456"
+              className="w-full rounded-xl border border-slate-300 px-4 py-3 text-center font-mono text-lg tracking-widest focus:border-accent-500 focus:outline-none"
+            />
+            {error ? <p className="text-sm text-red-600">{error}</p> : null}
+            <button
+              disabled={busy || code.length !== 6}
+              className="w-full rounded-xl bg-navy-950 py-3 font-semibold text-white hover:bg-navy-900 disabled:opacity-50"
+            >
+              Verify
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                clearChallenge();
+                setCode('');
+                setError('');
+              }}
+              className="w-full text-center text-xs font-semibold text-slate-400 hover:text-slate-600"
+            >
+              Back to sign in
+            </button>
+          </form>
+        ) : (
+          <form onSubmit={onSubmit} className="space-y-4">
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-slate-500">Email</label>
+              <input
+                type="email"
+                required
+                autoComplete="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="w-full rounded-xl border border-slate-300 px-4 py-3 focus:border-accent-500 focus:outline-none"
+                placeholder="you@company.com"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-slate-500">Password</label>
+              <input
+                type="password"
+                required
+                autoComplete="current-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full rounded-xl border border-slate-300 px-4 py-3 focus:border-accent-500 focus:outline-none"
+                placeholder="••••••••"
+              />
+            </div>
+            {error ? <p className="text-sm text-red-600">{error}</p> : null}
+            <button
+              disabled={busy}
+              className="w-full rounded-xl bg-accent-500 py-3 font-semibold text-white hover:bg-accent-600 disabled:opacity-50"
+            >
+              {busy ? 'Signing in…' : 'Sign in'}
+            </button>
+          </form>
+        )}
+
+        <p className="mt-6 text-center text-sm text-slate-500">
+          New here?{' '}
+          <Link href="/register" className="font-semibold text-accent-500 hover:underline">
+            Create an organization
+          </Link>
+        </p>
+        <p className="mt-2 text-center text-xs text-slate-400">
+          Demo: demo@tracksphere.dev / DemoPassw0rd!
+        </p>
+      </div>
+    </div>
+  );
+}

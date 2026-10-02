@@ -1,0 +1,33 @@
+# Binaries
+/bin/
+/dist/
+*.exe
+*.test
+
+# Env
+.env
+.env.local
+
+# Node
+node_modules/
+web/.next/
+web/out/
+*.tsbuildinfo
+
+# Go
+vendor/
+
+# Build/deploy artifacts
+logs/
+*.log
+deploy/.env
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+
+.kilo/
+# Test artifacts
+coverage.out
+coverage.html
