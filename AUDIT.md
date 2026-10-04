@@ -1,5 +1,13 @@
 # TrackSphere Production-Readiness Audit
 
+> **SUPERSEDED — retained as a historical record. Do not act on this file.**
+>
+> The current audit is [`AUDIT-2026-10-04.md`](AUDIT-2026-10-04.md).
+>
+> This file (2026-10-03) predates migrations 000005–000018, `circuitbreaker`,
+> `httpclient`, `sso`, `intel`, `billing`, `mcp.go`, five UI pages and the CI
+> workflow, and its P0 remediation claims do not hold against the current tree.
+
 **Audit Date:** 2026-10-03  
 **Version:** 0.1.0 (Phase 1 — Foundation)  
 **Scope:** Full-stack audit of Go API/worker + Next.js web, PostgreSQL 16, Docker Compose deployment
