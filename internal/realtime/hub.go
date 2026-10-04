@@ -24,35 +24,67 @@ type Event struct {
 }
 
 type subscriber struct {
-	id     uuid.UUID
-	tenant uuid.UUID
-	ch     chan Event
+	id        uuid.UUID
+	tenant    uuid.UUID
+	shipment  *uuid.UUID
+	userAgent string
+	ipHash    string
+	ch        chan Event
 }
 
 // Hub manages SSE subscribers.
 type Hub struct {
-	mu   sync.RWMutex
-	subs map[uuid.UUID]*subscriber // by subscriber id
-	log  *slog.Logger
+	mu       sync.RWMutex
+	subs     map[uuid.UUID]*subscriber // by subscriber id
+	log      *slog.Logger
+	pool     *pgxpool.Pool // for recording subscriptions
 }
 
 // NewHub creates an empty hub.
-func NewHub(log *slog.Logger) *Hub {
+func NewHub(log *slog.Logger, pool *pgxpool.Pool) *Hub {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Hub{subs: map[uuid.UUID]*subscriber{}, log: log}
+	return &Hub{
+		subs: map[uuid.UUID]*subscriber{},
+		log:  log,
+		pool: pool,
+	}
 }
 
 // Subscribe registers a listener for one tenant. The returned channel is
 // closed when the context is cancelled. Buffer prevents slow clients from
 // blocking the fan-out; overflow drops the subscriber (browser auto-reconnects).
-func (h *Hub) Subscribe(ctx context.Context, tenantID uuid.UUID) <-chan Event {
-	sub := &subscriber{id: uuid.New(), tenant: tenantID, ch: make(chan Event, 64)}
+func (h *Hub) Subscribe(ctx context.Context, tenantID uuid.UUID, userAgent, ipHash string) <-chan Event {
+	return h.subscribe(ctx, tenantID, nil, userAgent, ipHash)
+}
+
+// SubscribeShipment registers a listener for a single shipment within a tenant.
+// Used by the public tracking portal, which has resolved exactly one shipment
+// and must never see any other customer's events.
+func (h *Hub) SubscribeShipment(ctx context.Context, tenantID, shipmentID uuid.UUID, userAgent, ipHash string) <-chan Event {
+	return h.subscribe(ctx, tenantID, &shipmentID, userAgent, ipHash)
+}
+
+func (h *Hub) subscribe(ctx context.Context, tenantID uuid.UUID, shipment *uuid.UUID, userAgent, ipHash string) <-chan Event {
+	sub := &subscriber{
+		id:        uuid.New(),
+		tenant:    tenantID,
+		shipment:  shipment,
+		userAgent: userAgent,
+		ipHash:    ipHash,
+		ch:        make(chan Event, 64),
+	}
 	h.mu.Lock()
 	h.subs[sub.id] = sub
+	total := len(h.subs)
 	h.mu.Unlock()
-	h.log.Debug("sse subscribe", "tenant", tenantID, "sub", sub.id, "total", len(h.subs))
+	h.log.Debug("sse subscribe", "tenant", tenantID, "shipment", shipment, "sub", sub.id, "total", total)
+
+	// Record subscription in DB (best-effort, async)
+	if h.pool != nil {
+		go h.recordSubscription(sub)
+	}
 
 	go func() {
 		<-ctx.Done()
@@ -62,8 +94,40 @@ func (h *Hub) Subscribe(ctx context.Context, tenantID uuid.UUID) <-chan Event {
 			close(cur.ch)
 		}
 		h.mu.Unlock()
+		// Record disconnect
+		if h.pool != nil {
+			go h.recordDisconnect(sub.id)
+		}
 	}()
 	return sub.ch
+}
+
+func (h *Hub) recordSubscription(sub *subscriber) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	shipmentID := ""
+	if sub.shipment != nil {
+		shipmentID = sub.shipment.String()
+	}
+	_, err := h.pool.Exec(ctx, `
+		INSERT INTO sse_subscriptions (id, tenant_id, shipment_id, subscriber_id, user_agent, ip_hash)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		ON CONFLICT (id) DO NOTHING`,
+		sub.id, sub.tenant, shipmentID, sub.id, sub.userAgent, sub.ipHash)
+	if err != nil {
+		h.log.Debug("sse subscription record failed", "err", err)
+	}
+}
+
+func (h *Hub) recordDisconnect(subID uuid.UUID) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := h.pool.Exec(ctx, `
+		UPDATE sse_subscriptions SET disconnected_at = now()
+		WHERE subscriber_id = $1`, subID)
+	if err != nil {
+		h.log.Debug("sse disconnect record failed", "err", err)
+	}
 }
 
 // Publish fans an event out to all subscribers of its tenant.
@@ -73,6 +137,12 @@ func (h *Hub) Publish(ev Event) {
 	for _, sub := range h.subs {
 		if sub.tenant != ev.TenantID {
 			continue
+		}
+		// Shipment-scoped subscribers only see their own shipment.
+		if sub.shipment != nil {
+			if ev.ShipmentID == nil || *ev.ShipmentID != *sub.shipment {
+				continue
+			}
 		}
 		select {
 		case sub.ch <- ev:

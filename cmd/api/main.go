@@ -40,7 +40,7 @@ func main() {
 		}
 	}
 
-	pool, err := db.Open(ctx, cfg.DatabaseURL)
+	pool, err := db.Open(ctx, cfg.DatabaseURL, cfg.WorkerConcurrency, cfg.APIWorkers)
 	if err != nil {
 		log.Error("database", "err", err)
 		os.Exit(1)
@@ -48,7 +48,7 @@ func main() {
 	defer pool.Close()
 
 	// Dependencies
-	hub := realtime.NewHub(log)
+	hub := realtime.NewHub(log, pool)
 	q := queue.New(pool, cfg.WorkerPollInterval, log)
 	repo := shipments.NewRepository(pool)
 	svc := shipments.NewService(pool, q)

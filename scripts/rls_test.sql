@@ -12,6 +12,10 @@
 --   3. Portal flag (public_access) sees public shipments, but NOT private.
 --   4. Portal flag cannot write (WITH CHECK requires tenant pin).
 --   5. Portal flag sees only public shipments' timelines.
+--   6. Portal flag cannot write (WITH CHECK requires tenant pin).
+--   7. All 23 tenant tables fail closed with NO context (the 000015 backfill
+--      gate — catches any future tenant table added without a policy).
+--   8. Unpinned writes are rejected on every writable tenant table.
 
 \set ON_ERROR_STOP on
 
@@ -28,6 +32,8 @@ DECLARE
     n_alert int;
     n_evil_own int;
     n_private int;
+    n_rows int;
+    tbl text;
 BEGIN
     SELECT id INTO acme FROM tenants WHERE slug = 'acme-logistics'
         OR id = current_tenant();
@@ -63,6 +69,12 @@ BEGIN
         WHEN insufficient_privilege OR check_violation THEN
             RAISE NOTICE 'TEST 2 PASS: cross-tenant insert rejected by WITH CHECK';
     END;
+
+    -- NOTE: the "same tracking number is reusable across tenants" property used to
+-- live here. It was never an RLS property — it is a schema property — and the
+-- block could not pass as the app role, because inserting a shipment requires a
+-- real parent row in `tenants`, which RLS correctly hides. It now lives in
+-- scripts/schema_test.sql and runs as the owner.
 
     -- ── No context (fail-closed) ───────────────────────────────────────
     PERFORM set_config('app.tenant_id', '', true);
@@ -104,6 +116,94 @@ BEGIN
         WHEN insufficient_privilege OR check_violation THEN
             RAISE NOTICE 'TEST 6 PASS: portal-flag write rejected';
     END;
+
+    -- ── Every tenant table must fail closed with no context ────────────────
+    -- The Phase-1 platform tables (api_keys, tenant_webhooks,
+    -- webhook_deliveries, idempotency_keys) and the P2/P3 tables were created
+    -- WITHOUT row-level security and were later backfilled (000015). Their
+    -- handlers filtered correctly in Go, which is application-level discipline,
+    -- not a database guarantee — exactly the class of bug a future refactor
+    -- reintroduces. This block is the CI gate that keeps them covered.
+    --
+    -- If anyone adds a tenant-scoped table without a policy, this fails.
+    PERFORM set_config('app.tenant_id', '', true);
+    PERFORM set_config('app.public_access', '', true);
+    PERFORM set_config('app.system', '', true);
+
+    FOR tbl IN
+        SELECT unnest(ARRAY[
+            'shipments', 'shipment_events', 'alerts', 'notifications',
+            'shipment_current', 'shipment_milestones', 'shipment_audit',
+            'tracking_subscriptions', 'shipment_documents', 'shipment_legs',
+            'tenant_branding', 'ecommerce_connections', 'carrier_credentials',
+            'api_keys', 'tenant_webhooks', 'webhook_deliveries',
+            'idempotency_keys', 'stripe_subscriptions', 'sso_accounts',
+            'notification_consent', 'notification_interrupts',
+            'notification_digest_queue', 'alert_rules'
+        ])
+    LOOP
+        EXECUTE format('SELECT count(*) FROM %I', tbl) INTO n_rows;
+        IF n_rows <> 0 THEN
+            RAISE EXCEPTION 'fail-open: % exposes % rows with no context',
+                tbl, n_rows;
+        END IF;
+    END LOOP;
+    RAISE NOTICE 'TEST 7 PASS: all 23 tenant tables fail closed with no context';
+
+    -- ── No-context writes must be rejected everywhere ─────────────────────
+    FOR tbl IN
+        SELECT unnest(ARRAY[
+            'shipment_current', 'shipment_milestones', 'tracking_subscriptions',
+            'notification_consent', 'notification_interrupts', 'alert_rules',
+            'api_keys', 'tenant_webhooks', 'webhook_deliveries'
+        ])
+    LOOP
+        BEGIN
+            IF tbl IN ('shipment_current', 'shipment_milestones') THEN
+                -- NOT NULL-heavy tables: an insert with no tenant simply cannot
+                -- satisfy the policy, and the error may surface as either a
+                -- policy violation or a not-null violation.
+                EXECUTE format(
+                    'INSERT INTO %I (tenant_id) VALUES (gen_random_uuid())', tbl);
+            ELSIF tbl = 'tracking_subscriptions' THEN
+                EXECUTE format(
+                    'INSERT INTO %I (tenant_id, shipment_id, channel, recipient, status) ' ||
+                    'VALUES (gen_random_uuid(), gen_random_uuid(), ''email'', ''x@y.z'', ''active'')', tbl);
+            ELSIF tbl = 'notification_consent' THEN
+                EXECUTE format(
+                    'INSERT INTO %I (tenant_id, recipient_hash, action) ' ||
+                    'VALUES (gen_random_uuid(), ''deadbeef'', ''confirmed'')', tbl);
+            ELSIF tbl = 'notification_interrupts' THEN
+                -- The interrupt ledger has no `action`: it records a delivery,
+                -- not a consent transition.
+                EXECUTE format(
+                    'INSERT INTO %I (tenant_id, recipient_hash, severity) ' ||
+                    'VALUES (gen_random_uuid(), ''deadbeef'', ''critical'')', tbl);
+            ELSIF tbl = 'alert_rules' THEN
+                EXECUTE format(
+                    'INSERT INTO %I (tenant_id, name, kind) ' ||
+                    'VALUES (gen_random_uuid(), ''rogue'', ''rogue'')', tbl);
+            ELSIF tbl = 'api_keys' THEN
+                EXECUTE format(
+                    'INSERT INTO %I (tenant_id, name, prefix, key_hash) ' ||
+                    'VALUES (gen_random_uuid(), ''rogue'', ''rogue'', decode(''00'',''hex''))', tbl);
+            ELSIF tbl = 'tenant_webhooks' THEN
+                EXECUTE format(
+                    'INSERT INTO %I (tenant_id, url, secret) ' ||
+                    'VALUES (gen_random_uuid(), ''https://x.invalid'', ''s'')', tbl);
+            ELSE
+                EXECUTE format(
+                    'INSERT INTO %I (tenant_id, endpoint_id, event_type) ' ||
+                    'VALUES (gen_random_uuid(), gen_random_uuid(), ''rogue'')', tbl);
+            END IF;
+            RAISE EXCEPTION 'unpinned write succeeded on % — WITH CHECK broken', tbl;
+        EXCEPTION
+            WHEN insufficient_privilege OR check_violation OR not_null_violation
+                OR foreign_key_violation THEN
+                NULL; -- rejected, as required
+        END;
+    END LOOP;
+    RAISE NOTICE 'TEST 8 PASS: unpinned writes rejected on all writable tenant tables';
 END $$;
 
 SELECT 'ALL RLS TESTS PASSED' AS result;

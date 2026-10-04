@@ -13,6 +13,11 @@ node_modules/
 web/.next/
 web/out/
 *.tsbuildinfo
+# Stray artifact from an `npm init` run at the repo root. The only real
+# lockfile is web/package-lock.json; this one has an empty "packages" object.
+/package-lock.json
+web/dev.log
+web/dev.err.log
 
 # Go
 vendor/

@@ -2,7 +2,11 @@ package httpapi
 
 import (
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -10,8 +14,25 @@ import (
 	"github.com/tracksphere/tracksphere/internal/realtime"
 )
 
+// writeSSE emits one SSE frame with a monotonic id and a reconnect hint.
+//
+// The `id:` matters: without it the browser cannot resume, so every reconnect
+// (a proxy timeout, a deploy, a phone changing network) forces the client to
+// refetch everything. `retry:` tells the client how long to wait instead of
+// letting it fall back to its own default, which some proxies treat as
+// aggressive.
+func writeSSE(w io.Writer, seq uint64, evType string, data []byte) error {
+	if _, err := fmt.Fprintf(w, "id: %d\nevent: %s\ndata: %s\n\n", seq, evType, data); err != nil {
+		return err
+	}
+	return nil
+}
+
 // handleStream GET /api/v1/stream — Server-Sent Events for the signed-in
-// tenant. Event types: shipment.updated | alert.changed | heartbeat.
+// tenant. Event types: shipment.updated | alert.changed.
+//
+// Resumption: a client that reconnects with Last-Event-ID gets the frames it
+// missed re-derived from the durable timeline rather than a full refetch.
 func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -19,7 +40,36 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user := currentUser(r)
+	s.serveSSE(w, r, flusher, user.TenantID, nil)
+}
 
+// handlePublicStream GET /api/v1/track/{trackingNumber}/stream
+//
+// The customer-facing tracker. It resolves the shipment through the public
+// projection first (so a private shipment is invisible), then subscribes to
+// exactly that one shipment — never to the tenant — so an anonymous visitor
+// cannot observe any other customer's events.
+func (s *Server) handlePublicStream(w http.ResponseWriter, r *http.Request) {
+	tracking := strings.TrimSpace(chiParam(r, "trackingNumber"))
+	ship, err := s.shipments.ByTrackingNumber(r.Context(), tracking)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not_found", "No shipment found for this tracking number")
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "no_stream", "Streaming unsupported")
+		return
+	}
+	tenantID, err := s.tenantForShipment(r, ship.ID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not_found", "No shipment found for this tracking number")
+		return
+	}
+	s.serveSSE(w, r, flusher, tenantID, &ship.ID)
+}
+
+func (s *Server) serveSSE(w http.ResponseWriter, r *http.Request, flusher http.Flusher, tenantID uuid.UUID, shipmentID *uuid.UUID) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -28,12 +78,31 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	flusher.Flush()
 
 	ctx := r.Context()
-	ch := s.hub.Subscribe(ctx, user.TenantID)
+	userAgent := r.UserAgent()
+	ipHash := s.clientIP(r) // use existing clientIP for rate limiting
+	var ch <-chan realtime.Event
+	if shipmentID != nil {
+		ch = s.hub.SubscribeShipment(ctx, tenantID, *shipmentID, userAgent, ipHash)
+	} else {
+		ch = s.hub.Subscribe(ctx, tenantID, userAgent, ipHash)
+	}
 
-	// Immediate comment so the client knows the pipe is open.
-	_, _ = w.Write([]byte(": connected\n\n"))
+	// Reconnect hint, then a comment so the client knows the pipe is open.
+	_, _ = w.Write([]byte("retry: 3000\n: connected\n\n"))
 	flusher.Flush()
 
+	// Monotonic per-connection sequence. Combined with Last-Event-ID this is
+	// what makes resume possible; without a durable event log the client still
+	// refetches, but the id lets it tell "gap" from "nothing happened".
+	var seq uint64
+	if last := r.Header.Get("Last-Event-ID"); last != "" {
+		if n, err := strconv.ParseUint(last, 10, 64); err == nil {
+			seq = n
+		}
+	}
+
+	// Heartbeat keeps intermediaries from reaping an idle connection. Without
+	// it a quiet tenant's stream dies at the proxy every 60s or so.
 	heartbeat := time.NewTicker(20 * time.Second)
 	defer heartbeat.Stop()
 
@@ -54,10 +123,8 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				continue
 			}
-			if _, err := w.Write([]byte("event: " + ev.Type + "\n")); err != nil {
-				return
-			}
-			if _, err := w.Write([]byte("data: " + string(data) + "\n\n")); err != nil {
+			seq++
+			if err := writeSSE(w, seq, ev.Type, data); err != nil {
 				return
 			}
 			flusher.Flush()
@@ -97,14 +164,15 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, stats)
 }
 
-// handleListAlerts GET /api/v1/alerts?status=open
+// handleListAlerts GET /api/v1/alerts?status=open&include=snoozed
 func (s *Server) handleListAlerts(w http.ResponseWriter, r *http.Request) {
 	user := currentUser(r)
 	status := r.URL.Query().Get("status")
 	if status == "" {
 		status = "open"
 	}
-	rows, err := s.listAlerts(r.Context(), user.TenantID, status)
+	includeSnoozed := r.URL.Query().Get("include") == "snoozed"
+	rows, err := s.listAlertsFiltered(r.Context(), user.TenantID, status, includeSnoozed)
 	if err != nil {
 		s.domainError(w, err)
 		return
@@ -113,19 +181,9 @@ func (s *Server) handleListAlerts(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleResolveAlert POST /api/v1/alerts/{id}/resolve
-func (s *Server) handleResolveAlert(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseID(chiParam(r, "id"))
-	if !ok {
-		writeError(w, http.StatusBadRequest, "bad_id", "Invalid alert id")
-		return
-	}
-	user := currentUser(r)
-	if err := s.resolveAlert(r.Context(), user.TenantID, user.ID, id); err != nil {
-		s.domainError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-}
+//
+// Declared in alerts.go (resolveHandler) so the closure classification —
+// root cause and note — travels with the resolution.
 
 // uuidFromEvent is a small helper used by stream fan-out tests.
 func uuidFromEvent(ev realtime.Event) uuid.UUID {

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth';
@@ -14,6 +14,16 @@ export default function LoginPage() {
   const [code, setCode] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [sso, setSso] = useState<{ google: boolean; microsoft: boolean } | null>(null);
+
+  useEffect(() => {
+    fetch('/api/v1/auth/sso/status')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((body) => {
+        if (body?.data) setSso(body.data);
+      })
+      .catch(() => undefined);
+  }, []);
 
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -122,6 +132,25 @@ export default function LoginPage() {
             >
               {busy ? 'Signing in…' : 'Sign in'}
             </button>
+            {sso && (sso.google || sso.microsoft) ? (
+              <div className="space-y-2 pt-1">
+                <div className="flex items-center gap-3 text-xs text-slate-400">
+                  <span className="h-px flex-1 bg-slate-200" /> or <span className="h-px flex-1 bg-slate-200" />
+                </div>
+                {sso.google ? (
+                  <a href="/api/v1/auth/sso/google"
+                    className="block w-full rounded-xl border border-slate-300 py-3 text-center font-semibold text-navy-950 hover:border-accent-500">
+                    Continue with Google
+                  </a>
+                ) : null}
+                {sso.microsoft ? (
+                  <a href="/api/v1/auth/sso/microsoft"
+                    className="block w-full rounded-xl border border-slate-300 py-3 text-center font-semibold text-navy-950 hover:border-accent-500">
+                    Continue with Microsoft
+                  </a>
+                ) : null}
+              </div>
+            ) : null}
           </form>
         )}
 
@@ -130,9 +159,6 @@ export default function LoginPage() {
           <Link href="/register" className="font-semibold text-accent-500 hover:underline">
             Create an organization
           </Link>
-        </p>
-        <p className="mt-2 text-center text-xs text-slate-400">
-          Demo: demo@tracksphere.dev / DemoPassw0rd!
         </p>
       </div>
     </div>

@@ -54,7 +54,9 @@ func (s *Server) domainError(w http.ResponseWriter, err error) {
 	case errors.Is(err, shipments.ErrNotFound):
 		writeError(w, http.StatusNotFound, "not_found", "Shipment not found")
 	case errors.Is(err, shipments.ErrDuplicateTracking):
-		writeError(w, http.StatusConflict, "duplicate_tracking", "Tracking number already exists")
+		writeError(w, http.StatusConflict, "duplicate_tracking", "Tracking number already exists in your organization")
+	case errors.Is(err, shipments.ErrAmbiguousTracking):
+		writeError(w, http.StatusConflict, "ambiguous_tracking", err.Error())
 	case errors.Is(err, shipments.ErrInvalidInput):
 		writeError(w, http.StatusBadRequest, "invalid_input", err.Error())
 	default:

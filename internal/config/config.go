@@ -5,6 +5,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -15,20 +16,45 @@ import (
 
 type Config struct {
 	Env     string // local | development | production
+	Region  string // deployment region, e.g. us | eu (data-residency label)
 	HTTPAddr string
+	// PublicURL is the externally visible origin (e.g. https://track.acme.com).
+	// Used for links we send to customers — confirmation emails, unsubscribe
+	// links. The API sits behind Cloudflare and cannot infer its own origin.
+	PublicURL string
 
 	DatabaseURL       string
 	MigrationsURL     string
 	AutoMigrate       bool
 
 	CORSOrigins []string
+	// TrustedProxies are CIDRs or bare IPs whose forwarding headers
+	// (X-Forwarded-For / X-Real-IP / CF-Connecting-IP) are believed. Requests
+	// from anything else are keyed on the peer address, so a client cannot mint
+	// a fresh rate-limit bucket per request by forging a header.
+	// TRACKSPHERE_TRUSTED_PROXIES="10.0.0.0/8,172.16.0.0/12,127.0.0.1/32"
+	TrustedProxies []*net.IPNet
+	// TrustCloudflareHeaders additionally believes CF-Connecting-IP. Only set
+	// this when Cloudflare is the ONLY thing that can reach the API.
+	TrustCloudflareHeaders bool
+	// ExposeMetrics gates GET /api/v1/metrics. Off by default: queue depth and
+	// outage rate are operational reconnaissance, and the endpoint sits behind
+	// the same public hostname as everything else.
+	ExposeMetrics bool
 
-	SecretKey      []byte
-	SessionTTL     time.Duration
+	SecretKeys   [][]byte // Multi-key rotation: first is primary for encryption, all tried for decryption
+	SecretKey    []byte   // Legacy single key (deprecated, use SecretKeys)
+	SessionTTL   time.Duration
 	WebhookSecret  []byte
+	// Per-carrier HMAC secrets: TRACKSPHERE_CARRIER_WEBHOOK_SECRETS="maersk:s1,dhl:s2".
+	// WebhookSecret remains the fallback/default. Rotate per carrier without
+	// breaking the others.
+	CarrierSecrets map[string]string
 
 	WorkerConcurrency   int
 	WorkerPollInterval  time.Duration
+	// APIWorkers is the number of API worker processes (for pool sizing)
+	APIWorkers int
 
 	LogLevel string
 }
@@ -40,7 +66,9 @@ func Load() (*Config, error) {
 
 	cfg := &Config{
 		Env:            get("TRACKSPHERE_ENV", "local"),
+		Region:         get("TRACKSPHERE_REGION", "us"),
 		HTTPAddr:       get("TRACKSPHERE_HTTP_ADDR", ":8080"),
+		PublicURL:      strings.TrimRight(get("TRACKSPHERE_PUBLIC_URL", ""), "/"),
 		DatabaseURL:    get("TRACKSPHERE_DATABASE_URL", ""),
 		MigrationsURL:  get("TRACKSPHERE_MIGRATIONS_URL", ""),
 		CORSOrigins:    splitCSV(get("TRACKSPHERE_CORS_ORIGINS", "http://localhost:5173")),
@@ -52,6 +80,9 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	if cfg.WorkerConcurrency, err = getInt("TRACKSPHERE_WORKER_CONCURRENCY", 4, 1, 64); err != nil {
+		return nil, err
+	}
+	if cfg.APIWorkers, err = getInt("TRACKSPHERE_API_WORKERS", 1, 1, 32); err != nil {
 		return nil, err
 	}
 	pollMS, err := getInt("TRACKSPHERE_WORKER_POLL_INTERVAL_MS", 500, 50, 10_000)
@@ -66,8 +97,26 @@ func Load() (*Config, error) {
 	}
 	cfg.SessionTTL = time.Duration(ttlHours) * time.Hour
 
-	cfg.SecretKey = []byte(get("TRACKSPHERE_SECRET_KEY", ""))
+	cfg.SecretKeys = parseSecretKeys(get("TRACKSPHERE_SECRET_KEYS", ""))
+	// Backward compatibility: if TRACKSPHERE_SECRET_KEY is set but SECRET_KEYS is not, use it
+	if len(cfg.SecretKeys) == 0 {
+		cfg.SecretKey = []byte(get("TRACKSPHERE_SECRET_KEY", ""))
+		if len(cfg.SecretKey) > 0 {
+			cfg.SecretKeys = [][]byte{cfg.SecretKey}
+		}
+	}
 	cfg.WebhookSecret = []byte(get("TRACKSPHERE_CARRIER_WEBHOOK_SECRET", ""))
+	cfg.CarrierSecrets = parseCarrierSecrets(get("TRACKSPHERE_CARRIER_WEBHOOK_SECRETS", ""))
+	cfg.TrustedProxies, err = parseCIDRs(get("TRACKSPHERE_TRUSTED_PROXIES", ""))
+	if err != nil {
+		return nil, err
+	}
+	if cfg.TrustCloudflareHeaders, err = getBool("TRACKSPHERE_TRUST_CLOUDFLARE_HEADERS", false); err != nil {
+		return nil, err
+	}
+	if cfg.ExposeMetrics, err = getBool("TRACKSPHERE_EXPOSE_METRICS", false); err != nil {
+		return nil, err
+	}
 
 	if cfg.DatabaseURL == "" {
 		return nil, fmt.Errorf("TRACKSPHERE_DATABASE_URL is required")
@@ -75,11 +124,27 @@ func Load() (*Config, error) {
 	if cfg.MigrationsURL == "" {
 		cfg.MigrationsURL = cfg.DatabaseURL
 	}
-	if len(cfg.SecretKey) == 0 {
-		return nil, fmt.Errorf("TRACKSPHERE_SECRET_KEY is required")
+	if len(cfg.SecretKeys) == 0 {
+		return nil, fmt.Errorf("TRACKSPHERE_SECRET_KEYS or TRACKSPHERE_SECRET_KEY is required")
 	}
 	if len(cfg.WebhookSecret) == 0 {
 		return nil, fmt.Errorf("TRACKSPHERE_CARRIER_WEBHOOK_SECRET is required")
+	}
+	if cfg.Env == "production" {
+		// Validate all secret keys
+		for i, k := range cfg.SecretKeys {
+			if len(k) < 32 {
+				return nil, fmt.Errorf("TRACKSPHERE_SECRET_KEYS[%d] must be >= 32 chars in production", i)
+			}
+		}
+		if len(cfg.WebhookSecret) < 32 {
+			return nil, fmt.Errorf("TRACKSPHERE_CARRIER_WEBHOOK_SECRET must be >= 32 chars in production")
+		}
+		for carrier, s := range cfg.CarrierSecrets {
+			if len(s) < 16 {
+				return nil, fmt.Errorf("per-carrier webhook secret for %q must be >= 16 chars in production", carrier)
+			}
+		}
 	}
 	switch cfg.Env {
 	case "local", "development", "production":
@@ -131,4 +196,132 @@ func splitCSV(s string) []string {
 		}
 	}
 	return out
+}
+
+// parseSecretKeys parses TRACKSPHERE_SECRET_KEYS="key1,key2,key3" into byte slices.
+// First key is primary (encryption), all keys are tried for decryption.
+func parseSecretKeys(s string) [][]byte {
+	if s == "" {
+		return nil
+	}
+	var keys [][]byte
+	for _, part := range splitCSV(s) {
+		if part == "" {
+			continue
+		}
+		keys = append(keys, []byte(part))
+	}
+	return keys
+}
+
+// parseCarrierSecrets parses "carrier:secret,carrier2:secret2" (carrier
+// lowercased, secret kept verbatim). Malformed entries are ignored.
+func parseCarrierSecrets(s string) map[string]string {
+	out := map[string]string{}
+	for _, part := range strings.Split(s, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		kv := strings.SplitN(part, ":", 2)
+		if len(kv) != 2 {
+			continue
+		}
+		carrier := strings.ToLower(strings.TrimSpace(kv[0]))
+		secret := strings.TrimSpace(kv[1])
+		if carrier == "" || secret == "" {
+			continue
+		}
+		out[carrier] = secret
+	}
+	return out
+}
+
+// WebhookSecretFor returns the per-carrier secret when configured, else the
+// global fallback. Callers must still reject empty secrets in production
+// (see Load guards).
+func (c *Config) WebhookSecretFor(carrier string) []byte {
+	if c == nil {
+		return nil
+	}
+	if s, ok := c.CarrierSecrets[strings.ToLower(carrier)]; ok && s != "" {
+		return []byte(s)
+	}
+	return c.WebhookSecret
+}
+
+// parseCIDRs parses a comma-separated list of IPs or CIDR blocks. A bare IP is
+// promoted to /32 (or /128). Unparseable entries are an error: silently
+// ignoring one would quietly disable the rate-limit bypass protection it gates.
+func parseCIDRs(s string) ([]*net.IPNet, error) {
+	var out []*net.IPNet
+	for _, part := range splitCSV(s) {
+		if strings.Contains(part, "/") {
+			_, n, err := net.ParseCIDR(part)
+			if err != nil {
+				return nil, fmt.Errorf("TRACKSPHERE_TRUSTED_PROXIES: %w", err)
+			}
+			out = append(out, n)
+			continue
+		}
+		ip := net.ParseIP(part)
+		if ip == nil {
+			return nil, fmt.Errorf("TRACKSPHERE_TRUSTED_PROXIES: %q is not an IP or CIDR", part)
+		}
+		bits := 32
+		if ip.To4() == nil {
+			bits = 128
+		}
+		out = append(out, &net.IPNet{IP: ip, Mask: net.CIDRMask(bits, bits)})
+	}
+	return out, nil
+}
+
+// IsTrustedProxy reports whether addr belongs to a configured trusted proxy.
+func (c *Config) IsTrustedProxy(addr string) bool {
+	if c == nil || len(c.TrustedProxies) == 0 {
+		return false
+	}
+	ip := net.ParseIP(addr)
+	if ip == nil {
+		return false
+	}
+	for _, n := range c.TrustedProxies {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// KnownCarriers is the allow-list for the {carrier} path segment. Unknown
+// slugs get 400 instead of silently creating a divergent dedup namespace.
+var KnownCarriers = map[string]bool{
+	"maersk": true, "dhl": true, "fedex": true, "ups": true,
+	"cma-cgm": true, "cma_cgm": true, "hapag": true, "msc": true,
+	"cosco": true, "one": true, "evergreen": true,
+}
+
+// RecommendedDBPoolSize returns the recommended max connections based on
+// the application's concurrency requirements.
+// Formula: (API workers + worker pollers + background tasks) × safety factor
+// Default safety factor = 2
+func (c *Config) RecommendedDBPoolSize() int {
+	// API needs connections for HTTP handlers + SSE hub + metrics
+	apiConns := c.APIWorkers + 2 // +2 for SSE hub, metrics
+	
+	// Worker needs connections for pollers + reaper + archiver + LISTEN + scheduler
+	workerConns := c.WorkerConcurrency + 4 // +4 for background tasks
+	
+	// Total with safety factor
+	total := (apiConns + workerConns) * 2
+	
+	// Cap at reasonable maximum
+	if total > 100 {
+		total = 100
+	}
+	if total < 10 {
+		total = 10
+	}
+	return total
 }

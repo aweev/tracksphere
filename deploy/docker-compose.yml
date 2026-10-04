@@ -30,6 +30,8 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.api
+      args:
+        VERSION: ${APP_VERSION:-dev}
     restart: unless-stopped
     depends_on:
       postgres:

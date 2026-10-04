@@ -47,5 +47,6 @@ func (s *Server) handlePublicTrack(w http.ResponseWriter, r *http.Request) {
 		"deliveredAt":    ship.DeliveredAt,
 		"lastUpdate":     ship.UpdatedAt,
 		"events":         events,
+		"brand":          s.brandFor(r.Context(), ship.TenantID.String()),
 	})
 }

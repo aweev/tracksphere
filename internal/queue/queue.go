@@ -51,6 +51,11 @@ func New(pool *pgxpool.Pool, poll time.Duration, log *slog.Logger) *Queue {
 	}
 }
 
+// Pool returns the underlying connection pool.
+func (q *Queue) Pool() *pgxpool.Pool {
+	return q.pool
+}
+
 // Register binds a handler to a job kind. Must be called before Run.
 func (q *Queue) Register(kind string, h Handler) {
 	q.mu.Lock()
@@ -58,7 +63,14 @@ func (q *Queue) Register(kind string, h Handler) {
 	q.handlers[kind] = h
 }
 
+// WorkerID derives a distinct locked_by identity per in-process poller.
+func (q *Queue) WorkerID(i int) string {
+	return fmt.Sprintf("%s-p%d", q.workerID, i)
+}
+
 // EnqueueTx inserts a job within an existing transaction (outbox pattern).
+// A pg_notify('jobs_added') rides in the same transaction so workers wake
+// immediately on commit (poll interval remains as fallback).
 func EnqueueTx(ctx context.Context, tx pgx.Tx, kind string, payload any, runAt time.Time) error {
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -73,6 +85,8 @@ func EnqueueTx(ctx context.Context, tx pgx.Tx, kind string, payload any, runAt t
 	if err != nil {
 		return fmt.Errorf("enqueue %s: %w", kind, err)
 	}
+	// Fires only on commit — workers never see uncommitted jobs.
+	_, _ = tx.Exec(ctx, `SELECT pg_notify('jobs_added', '')`)
 	return nil
 }
 
@@ -97,8 +111,8 @@ type jobRow struct {
 	MaxAttempts  int
 }
 
-// claim atomically grabs the next pending job. Returns nil when idle.
-func (q *Queue) claim(ctx context.Context) (*jobRow, error) {
+// claim atomically grabs the next pending job as workerID. Returns nil when idle.
+func (q *Queue) claim(ctx context.Context, workerID string) (*jobRow, error) {
 	tx, err := q.pool.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -120,7 +134,7 @@ func (q *Queue) claim(ctx context.Context) (*jobRow, error) {
 			LIMIT 1
 		)
 		RETURNING id, kind, payload, attempts, max_attempts`,
-		q.workerID)
+		workerID)
 
 	var j jobRow
 	if err := row.Scan(&j.ID, &j.Kind, &j.Payload, &j.Attempts, &j.MaxAttempts); err != nil {
@@ -169,8 +183,10 @@ func (q *Queue) complete(ctx context.Context, j *jobRow, handlerErr error) {
 		"attempt", j.Attempts, "dead", dead, "err", handlerErr)
 }
 
-// reapStuck returns jobs locked by a crashed worker to the pool.
-func (q *Queue) reapStuck(ctx context.Context) {
+// ReapStuck returns jobs locked by a crashed worker to the pool.
+// Run ONE reaper per deployment (see cmd/worker): per-poller reapers would
+// stampede the jobs table every minute.
+func (q *Queue) ReapStuck(ctx context.Context) {
 	_, err := q.pool.Exec(ctx, `
 		UPDATE jobs SET status='pending', locked_by=NULL, locked_at=NULL, updated_at=now()
 		WHERE status='running' AND locked_at < now() - interval '5 minutes'`)
@@ -179,44 +195,101 @@ func (q *Queue) reapStuck(ctx context.Context) {
 	}
 }
 
-// Run polls for jobs until ctx is cancelled. Blocks.
+// ArchiveOld deletes terminal jobs past retention (done>30d, dead>90d).
+// jobs grows forever otherwise — the claim index bloats and autovacuum lags.
+func (q *Queue) ArchiveOld(ctx context.Context) (int64, error) {
+	tag, err := q.pool.Exec(ctx, `
+		DELETE FROM jobs
+		WHERE (status='done' AND updated_at < now() - interval '30 days')
+		   OR (status='dead' AND updated_at < now() - interval '90 days')`)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
+// DeadJob is one row of the dead-letter queue.
+type DeadJob struct {
+	ID        int64     `json:"id"`
+	Kind      string    `json:"kind"`
+	Attempts  int       `json:"attempts"`
+	LastError *string   `json:"lastError,omitempty"`
+	UpdatedAt time.Time `json:"updatedAt"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+// ListDead returns the most recent dead jobs (ops DLQ view).
+func (q *Queue) ListDead(ctx context.Context, limit int) ([]DeadJob, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 25
+	}
+	rows, err := q.pool.Query(ctx, `
+		SELECT id, kind, attempts, last_error, updated_at, created_at
+		FROM jobs WHERE status='dead' ORDER BY updated_at DESC LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []DeadJob{}
+	for rows.Next() {
+		var j DeadJob
+		if err := rows.Scan(&j.ID, &j.Kind, &j.Attempts, &j.LastError, &j.UpdatedAt, &j.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, j)
+	}
+	return out, rows.Err()
+}
+
+// ReplayDead returns one dead job to pending (fresh attempts, immediate run).
+func (q *Queue) ReplayDead(ctx context.Context, id int64) error {
+	tag, err := q.pool.Exec(ctx, `
+		UPDATE jobs SET status='pending', attempts=0, run_at=now(),
+			locked_by=NULL, locked_at=NULL, last_error=NULL, updated_at=now()
+		WHERE id=$1 AND status='dead'`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("dead job %d not found", id)
+	}
+	_, _ = q.pool.Exec(ctx, `SELECT pg_notify('jobs_added', '')`)
+	return nil
+}
+
+// Run polls for jobs until ctx is cancelled using the queue's workerID.
+// Blocks. Prefer RunAs for per-poller IDs (see cmd/worker). No reaper here:
+// run ONE reaper per deployment via ReapStuck (worker main owns it).
 func (q *Queue) Run(ctx context.Context) {
-	q.log.Info("queue worker started", "worker_id", q.workerID,
+	q.RunAs(ctx, q.workerID)
+}
+
+// RunAs polls until ctx is cancelled as workerID. In-flight jobs finish
+// (handler + completion run detached from cancellation with their own
+// timeouts) — SIGTERM never loses a claimed job's completion write.
+func (q *Queue) RunAs(ctx context.Context, workerID string) {
+	q.log.Info("queue worker started", "worker_id", workerID,
 		"poll_interval", q.pollInterval)
 
-	reapTicker := time.NewTicker(time.Minute)
-	defer reapTicker.Stop()
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-reapTicker.C:
-				q.reapStuck(ctx)
-			}
-		}
-	}()
+	wake := make(chan struct{}, 1)
+	go q.listenJobs(ctx, wake)
 
 	for {
 		if ctx.Err() != nil {
-			q.log.Info("queue worker stopping", "worker_id", q.workerID)
+			q.log.Info("queue worker stopping", "worker_id", workerID)
 			return
 		}
-		job, err := q.claim(ctx)
+		job, err := q.claim(ctx, workerID)
 		if err != nil {
 			if ctx.Err() != nil {
 				return
 			}
 			q.log.Error("claim job", "err", err)
-			time.Sleep(q.pollInterval)
+			sleepOrWake(ctx, wake, q.pollInterval)
 			continue
 		}
 		if job == nil {
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(q.pollInterval):
-			}
+			sleepOrWake(ctx, wake, q.pollInterval)
 			continue
 		}
 
@@ -228,10 +301,60 @@ func (q *Queue) Run(ctx context.Context) {
 		if !ok {
 			herr = fmt.Errorf("no handler registered for kind %q", job.Kind)
 		} else {
-			hctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			// Detached from shutdown: the job was claimed, it must complete.
+			hctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 			herr = handler(hctx, job.Payload)
 			cancel()
 		}
-		q.complete(ctx, job, herr)
+		// Completion must survive shutdown too.
+		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		q.complete(cctx, job, herr)
+		cancel()
+	}
+}
+
+// listenJobs LISTENs for jobs_added and nudges wake (non-blocking).
+// Reconnects with backoff; the poll interval remains the fallback so a missed
+// notify only costs latency, never a job.
+func (q *Queue) listenJobs(ctx context.Context, wake chan struct{}) {
+	notify := func() { select { case wake <- struct{}{}: default: } }
+	for ctx.Err() == nil {
+		conn, err := q.pool.Acquire(ctx)
+		if err != nil {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(2 * time.Second):
+				continue
+			}
+		}
+		_, err = conn.Exec(ctx, `LISTEN jobs_added`)
+		if err != nil {
+			conn.Release()
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(2 * time.Second):
+				continue
+			}
+		}
+		func() {
+			defer conn.Release()
+			for ctx.Err() == nil {
+				_, err := conn.Conn().WaitForNotification(ctx)
+				if err != nil {
+					return // reconnect
+				}
+				notify()
+			}
+		}()
+	}
+}
+
+func sleepOrWake(ctx context.Context, wake chan struct{}, d time.Duration) {
+	select {
+	case <-ctx.Done():
+	case <-wake:
+	case <-time.After(d):
 	}
 }

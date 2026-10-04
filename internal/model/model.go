@@ -52,6 +52,38 @@ type Shipment struct {
 	IsPublic       bool       `json:"isPublic"`
 	CreatedAt      time.Time  `json:"createdAt"`
 	UpdatedAt      time.Time  `json:"updatedAt"`
+
+	// ── Read-model fields (shipment_current) ────────────────────────────
+	// Present on list views. These are the numbers that decide what an
+	// operator works next, and they are computed once in the read model rather
+	// than per request, so the list can be sorted by consequence.
+
+	// RiskScore 0-100, higher is worse. RiskTier is the display bucket.
+	RiskScore *int    `json:"riskScore,omitempty"`
+	RiskTier  *string `json:"riskTier,omitempty"`
+
+	// StaleHours is how long the carrier has been silent. This is the exception
+	// nobody can report by eye and it produces no event at all.
+	StaleHours *float64 `json:"staleHours,omitempty"`
+
+	OpenAlerts     *int `json:"openAlerts,omitempty"`
+	CriticalAlerts *int `json:"criticalAlerts,omitempty"`
+
+	// ETA provenance. A carrier-published ETA and our own estimate must never
+	// render identically, or operators stop believing every number on screen.
+	ETASource     string   `json:"etaSource,omitempty"`
+	ETAConfidence *float64 `json:"etaConfidence,omitempty"`
+
+	ValueAtRisk      *float64 `json:"valueAtRisk,omitempty"`
+	CustomerNotified *bool    `json:"customerNotified,omitempty"`
+
+	DwellHours         *float64 `json:"dwellHours,omitempty"`
+	ExpectedDwellHours *float64 `json:"expectedDwellHours,omitempty"`
+	DwellRatio         *float64 `json:"dwellRatio,omitempty"`
+
+	// Latest known position, from the newest geocoded checkpoint.
+	Lat *float64 `json:"lat,omitempty"`
+	Lng *float64 `json:"lng,omitempty"`
 }
 
 // ShipmentEvent is one point on the timeline.
@@ -80,6 +112,46 @@ type Alert struct {
 	Status     string     `json:"status"`
 	CreatedAt  time.Time  `json:"createdAt"`
 	ResolvedAt *time.Time `json:"resolvedAt,omitempty"`
+
+	// Ownership loop. An alert with no assignee belongs to nobody, so in a
+	// team nobody works it — unowned work is invisible work.
+	AssignedTo    *uuid.UUID `json:"assignedTo,omitempty"`
+	AssignedToName string    `json:"assignedToName,omitempty"`
+	AssignedAt    *time.Time `json:"assignedAt,omitempty"`
+	AcknowledgedAt *time.Time `json:"acknowledgedAt,omitempty"`
+
+	// SLA pressure. due_at is set from the tenant's per-severity target when
+	// the alert is raised; overrunning it escalates.
+	DueAt       *time.Time `json:"dueAt,omitempty"`
+	EscalatedAt *time.Time `json:"escalatedAt,omitempty"`
+	SnoozedUntil *time.Time `json:"snoozedUntil,omitempty"`
+
+	// Closure feedback. The root cause is what makes carrier scorecards and
+	// ETA calibration possible, so closing an alert without one is recorded as
+	// "other" rather than silently discarding the signal.
+	RootCause   string  `json:"rootCause,omitempty"`
+	Note        string  `json:"note,omitempty"`
+	Resolution  string  `json:"resolution,omitempty"`
+	ResolvedBy  *uuid.UUID `json:"resolvedBy,omitempty"`
+	ValueAtRisk *float64 `json:"valueAtRisk,omitempty"`
+
+	// Detection window. detected_at is when the condition first became true;
+	// last_seen_at is the sweep that most recently confirmed it still is. That
+	// gap is what distinguishes a live exception from a stale one.
+	DetectedAt time.Time `json:"detectedAt"`
+	LastSeenAt time.Time `json:"lastSeenAt"`
+
+	// Parent-shipment context (list views only; omitted when empty).
+	TrackingNumber string     `json:"trackingNumber,omitempty"`
+	ShipmentStatus string     `json:"shipmentStatus,omitempty"`
+	ShipmentETA    *time.Time `json:"shipmentEta,omitempty"`
+	// Derived read-model context so the queue can render the seven questions
+	// an exception card must answer without a second round trip.
+	RiskScore       *int     `json:"riskScore,omitempty"`
+	RiskTier        string   `json:"riskTier,omitempty"`
+	StaleHours      *float64 `json:"staleHours,omitempty"`
+	OpenAlertCount  int      `json:"openAlertCount,omitempty"`
+	CustomerNotified bool    `json:"customerNotified,omitempty"`
 }
 
 // User is the authenticated principal.

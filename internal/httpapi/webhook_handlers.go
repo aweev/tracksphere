@@ -4,11 +4,18 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
 
+	"github.com/google/uuid"
+
+	"github.com/tracksphere/tracksphere/internal/config"
 	"github.com/tracksphere/tracksphere/internal/model"
+	"github.com/tracksphere/tracksphere/internal/shipments"
 )
 
 // verifySignature checks X-TrackSphere-Signature: sha256=<hex hmac of body>.
@@ -27,12 +34,18 @@ func verifySignature(secret, body []byte, header string) bool {
 // handleCarrierWebhook POST /api/v1/webhooks/carriers/{carrier}
 //
 // Contract: HMAC-SHA256 over the raw body, hex-encoded, in the
-// X-TrackSphere-Signature header. Every delivery — valid or not — is written
-// to webhook_inbox for audit/replay before any processing happens.
+// X-TrackSphere-Signature header (per-carrier secret when configured, else
+// the global fallback). Every delivery — valid or not — is written to
+// webhook_inbox for audit/replay before any processing happens. raw_body
+// keeps the exact bytes; payload holds parsed JSON or '{}'.
 func (s *Server) handleCarrierWebhook(w http.ResponseWriter, r *http.Request) {
-	carrier := strings.ToLower(chiParam(r, "carrier"))
+	carrier := strings.ToLower(strings.TrimSpace(chiParam(r, "carrier")))
 	if carrier == "" {
 		writeError(w, http.StatusBadRequest, "bad_carrier", "Carrier segment required")
+		return
+	}
+	if !config.KnownCarriers[carrier] {
+		writeError(w, http.StatusBadRequest, "unknown_carrier", fmt.Sprintf("Unknown carrier %q", carrier))
 		return
 	}
 
@@ -42,15 +55,21 @@ func (s *Server) handleCarrierWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sigOK := verifySignature(s.cfg.WebhookSecret, body, r.Header.Get("X-TrackSphere-Signature"))
+	secret := s.cfg.WebhookSecretFor(carrier)
+	sigOK := len(secret) > 0 && verifySignature(secret, body, r.Header.Get("X-TrackSphere-Signature"))
 
-	// Audit first: insert before validation so rejected deliveries are visible.
+	// Audit first: never fail the audit insert on non-JSON bodies.
+	var payload any
+	payloadDoc := "{}"
+	if json.Unmarshal(body, &payload) == nil {
+		payloadDoc = string(body)
+	}
 	var inboxID int64
 	if err := s.pool.QueryRow(r.Context(),
-		`INSERT INTO webhook_inbox (carrier, signature_valid, payload)
-		 VALUES ($1,$2, coalesce($3::jsonb, '{}'::jsonb))
+		`INSERT INTO webhook_inbox (carrier, signature_valid, payload, raw_body)
+		 VALUES ($1,$2,$3::jsonb,$4)
 		 RETURNING id`,
-		carrier, sigOK, string(body)).Scan(&inboxID); err != nil {
+		carrier, sigOK, payloadDoc, string(body)).Scan(&inboxID); err != nil {
 		s.log.Error("webhook inbox insert failed", "err", err)
 	}
 
@@ -62,17 +81,29 @@ func (s *Server) handleCarrierWebhook(w http.ResponseWriter, r *http.Request) {
 	ev, err := model.DecodeCarrierEvent(body)
 	if err != nil {
 		s.pool.Exec(r.Context(),
-			`UPDATE webhook_inbox SET error=$2 WHERE id=$1`, inboxID, err.Error())
+			`UPDATE webhook_inbox SET error=$2 WHERE id=$1`, inboxID, "bad_event: "+err.Error())
 		writeError(w, http.StatusBadRequest, "bad_event", err.Error())
 		return
 	}
 
-	result, err := s.svc.IngestEvent(r.Context(), carrier, ev)
+	result, err := s.svc.IngestEvent(r.Context(), carrier, ev, "webhook")
 	if err != nil {
 		s.pool.Exec(r.Context(),
 			`UPDATE webhook_inbox SET error=$2 WHERE id=$1`, inboxID, err.Error())
-		// Unknown tracking number → 404 so carriers retry with backoff/alerting.
-		writeError(w, http.StatusNotFound, "unknown_tracking", err.Error())
+		switch {
+		case errors.Is(err, shipments.ErrAmbiguousTracking):
+			// Same carrier+tracking in several tenants — needs manual resolution.
+			writeError(w, http.StatusConflict, "ambiguous_tracking", err.Error())
+		case errors.Is(err, shipments.ErrUnknownTracking):
+			// Unknown tracking → 404 so carriers retry with backoff/alerting.
+			writeError(w, http.StatusNotFound, "unknown_tracking", err.Error())
+		default:
+			// DB/serialization failures must not masquerade as missing
+			// shipments — 500 + Retry-After so carriers back off correctly.
+			w.Header().Set("Retry-After", "30")
+			s.log.Error("webhook ingest failed", "err", err)
+			writeError(w, http.StatusInternalServerError, "ingest_failed", "Temporary failure, retry shortly")
+		}
 		return
 	}
 
@@ -84,10 +115,8 @@ func (s *Server) handleCarrierWebhook(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleManualEvent POST /api/v1/shipments/{id}/events
-// Lets ops agents append a scan through the same ingestion pipeline
-// (source becomes 'webhook' with a synthetic ops event id — noted in API docs
-// as a known simplification; a dedicated 'manual' source lands with the
-// exception-queue UI in Phase 2).
+// Lets ops agents append a scan through the same ingestion pipeline with
+// source='manual' and a uuid event id (no same-second collisions).
 func (s *Server) handleManualEvent(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseID(chiParam(r, "id"))
 	if !ok {
@@ -125,7 +154,7 @@ func (s *Server) handleManualEvent(w http.ResponseWriter, r *http.Request) {
 	now := timeNowUTC()
 	ev := &model.CarrierEvent{
 		TrackingNumber: ship.TrackingNumber,
-		EventID:        "ops-" + id.String()[:8] + "-" + now.Format("20060102150405"),
+		EventID:        "ops-" + uuid.NewString(),
 		Code:           req.Code,
 		Description:     req.Description,
 		Location:       req.Location,
@@ -134,10 +163,11 @@ func (s *Server) handleManualEvent(w http.ResponseWriter, r *http.Request) {
 		OccurredAt:     now,
 		Status:         req.Status,
 	}
-	result, err := s.svc.IngestEvent(r.Context(), ship.Carrier, ev)
+	result, err := s.svc.IngestEvent(r.Context(), ship.Carrier, ev, "manual")
 	if err != nil {
 		s.domainError(w, err)
 		return
 	}
+	s.auditShipment(r, user, id, "event.manual", map[string]any{"code": req.Code})
 	writeJSON(w, http.StatusCreated, result)
 }

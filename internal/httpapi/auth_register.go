@@ -144,6 +144,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		s.domainError(w, err)
 		return
 	}
+	s.auditEvent(r.Context(), &tenant.ID, &user.ID, user.Email, "register", r)
 	s.setSessionCookie(w, token)
 	writeJSON(w, http.StatusCreated, map[string]any{"user": user, "tenant": tenant})
 }

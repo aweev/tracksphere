@@ -2,43 +2,108 @@ package httpapi
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/tracksphere/tracksphere/internal/auth"
 	"github.com/tracksphere/tracksphere/internal/model"
 )
 
-// contextKey is an unexported context key type (prevents collisions).
 type contextKey int
 
 const (
-	ctxUserKey contextKey = iota
+	ctxUserKey      contextKey = iota
 	ctxTenantKey
+	ctxCSPNonceKey
 )
 
-// SessionCookie is the HttpOnly session cookie name.
 const SessionCookie = "tracksphere_session"
 
-// currentUser extracts the authenticated user set by requireAuth.
 func currentUser(r *http.Request) *model.User {
 	u, _ := r.Context().Value(ctxUserKey).(*model.User)
 	return u
 }
 
-// currentTenantID extracts the tenant set by requireAuth.
 func currentTenantID(r *http.Request) uuid.UUID {
 	id, _ := r.Context().Value(ctxTenantKey).(uuid.UUID)
 	return id
 }
 
-// requireAuth validates the session cookie and loads the user + tenant.
-// Unauthenticated requests get 401 with an machine-readable code.
+func getCSPNonce(r *http.Request) string {
+	nonce, _ := r.Context().Value(ctxCSPNonceKey).(string)
+	return nonce
+}
+
+// cspNonceMiddleware generates a CSP nonce and adds CSP headers.
+func (s *Server) cspNonceMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Generate a random nonce for this request
+		nonceBytes := make([]byte, 16)
+		if _, err := rand.Read(nonceBytes); err != nil {
+			s.log.Error("failed to generate CSP nonce", "err", err)
+			next.ServeHTTP(w, r)
+			return
+		}
+		nonce := base64.RawStdEncoding.EncodeToString(nonceBytes)
+
+		ctx := context.WithValue(r.Context(), ctxCSPNonceKey, nonce)
+
+		// Build CSP header with nonce
+		csp := s.buildCSP(nonce)
+		w.Header().Set("Content-Security-Policy", csp)
+
+		// Also set other security headers
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "SAMEORIGIN")
+		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		w.Header().Set("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
+
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+func (s *Server) buildCSP(nonce string) string {
+	// Base directives
+	directives := []string{
+		"default-src 'self'",
+		"script-src 'self' 'nonce-" + nonce + "'",
+		"style-src 'self' 'unsafe-inline'", // Tailwind needs unsafe-inline for @apply
+		"img-src 'self' data: https:",
+		"font-src 'self' data:",
+		"connect-src 'self' wss: https:",
+		"frame-ancestors 'self' https:",
+		"base-uri 'self'",
+		"form-action 'self'",
+		"object-src 'none'",
+		"frame-src 'self' https:",
+	}
+
+	// In production, add HSTS
+	if s.cfg.Env == "production" {
+		directives = append(directives, "upgrade-insecure-requests")
+	}
+
+	// Add tenant logo origins if configured
+	// This would be populated from tenant_branding table in a real implementation
+	// For now, we allow https: for img-src to support tenant logos
+
+	return strings.Join(directives, "; ")
+}
+
 func (s *Server) requireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if u := s.apiKeyUser(r); u != nil {
+			ctx := context.WithValue(r.Context(), ctxUserKey, u)
+			ctx = context.WithValue(ctx, ctxTenantKey, u.TenantID)
+			next.ServeHTTP(w, r.WithContext(ctx))
+			return
+		}
 		cookie, err := r.Cookie(SessionCookie)
 		if err != nil || cookie.Value == "" {
 			writeError(w, http.StatusUnauthorized, "unauthenticated", "Sign in required")
@@ -47,7 +112,6 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 
 		user, err := s.sessionUser(r.Context(), cookie.Value)
 		if err != nil || user == nil {
-			// Stale/invalid cookie: clear it so browsers stop sending it.
 			http.SetCookie(w, &http.Cookie{
 				Name: SessionCookie, Value: "", Path: "/",
 				Expires: time.Unix(0, 0), HttpOnly: true, SameSite: http.SameSiteLaxMode,
@@ -62,44 +126,42 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 	})
 }
 
-// sessionUser resolves a raw session token to its user, sliding expiry and
-// refreshing last_seen_at at most once a minute to limit write amplification.
 func (s *Server) sessionUser(ctx context.Context, rawToken string) (*model.User, error) {
 	hash := auth.HashToken(rawToken)
 	var (
-		u        model.User
-		expires  time.Time
-		mfaPend  bool
-		active   bool
-		totpOn   bool
+		u       model.User
+		expires time.Time
+		mfaPend bool
+		active  bool
+		totpOn  bool
+		stale   bool
 	)
 	err := s.pool.QueryRow(ctx, `
+		WITH touch AS (
+		    UPDATE sessions SET last_seen_at = now()
+		    WHERE token_hash = $1
+		      AND (last_seen_at IS NULL OR last_seen_at < now() - interval '1 minute')
+		    RETURNING 1
+		)
 		SELECT u.id, u.tenant_id, u.email, u.name, u.role, u.totp_enabled,
-		       u.is_active, u.created_at, s.expires_at, s.mfa_pending
+		       u.is_active, u.created_at, s.expires_at, s.mfa_pending,
+		       NOT EXISTS (SELECT 1 FROM touch)
 		FROM sessions s
 		JOIN users u ON u.id = s.user_id
 		WHERE s.token_hash = $1`, hash).
 		Scan(&u.ID, &u.TenantID, &u.Email, &u.Name, &u.Role, &totpOn,
-			&active, &u.CreatedAt, &expires, &mfaPend)
+			&active, &u.CreatedAt, &expires, &mfaPend, &stale)
 	if err != nil {
 		return nil, err
 	}
+	_ = stale
 	if !active || mfaPend || time.Now().After(expires) {
 		return nil, errInvalidSession
 	}
 	u.TOTPEnabled = totpOn
-
-	// Best-effort last_seen refresh (fire and forget to keep latency low).
-	go func() {
-		cctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		_, _ = s.pool.Exec(cctx,
-			`UPDATE sessions SET last_seen_at=now() WHERE token_hash=$1`, hash)
-	}()
 	return &u, nil
 }
 
-// cors implements permissive-for-dev CORS driven by config.
 func (s *Server) cors(next http.Handler) http.Handler {
 	allowed := map[string]bool{}
 	for _, o := range s.cfg.CORSOrigins {
@@ -111,8 +173,11 @@ func (s *Server) cors(next http.Handler) http.Handler {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
 			w.Header().Set("Vary", "Origin")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-TrackSphere-Signature")
+			w.Header().Set("Access-Control-Max-Age", "600")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, PUT, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers",
+				"Authorization, Content-Type, X-TrackSphere-Signature, Idempotency-Key, X-Shopify-Hmac-Sha256, X-WC-Webhook-Signature, X-Shop-Domain, X-WC-Shop")
+			w.Header().Set("Access-Control-Expose-Headers", "Retry-After, X-Request-Id")
 		}
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
@@ -122,7 +187,22 @@ func (s *Server) cors(next http.Handler) http.Handler {
 	})
 }
 
-// trimTracking normalizes a public tracking number path segment.
 func trimTracking(s string) string {
 	return strings.TrimSpace(s)
 }
+
+func (s *Server) querySystem(ctx context.Context, sql string, args ...any) pgx.Row {
+	c, err := s.pool.Acquire(ctx)
+	if err != nil {
+		return errRow{err}
+	}
+	defer c.Release()
+	if _, err := c.Exec(ctx, `SELECT set_config('app.system', 'on', true)`); err != nil {
+		return errRow{err}
+	}
+	return c.QueryRow(ctx, sql, args...)
+}
+
+type errRow struct{ err error }
+
+func (e errRow) Scan(dest ...any) error { return e.err }

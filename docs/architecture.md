@@ -99,8 +99,23 @@ Notable choices:
   token (`mfa_pending`) never attached to a cookie, deleted on use.
 - Webhooks: HMAC-SHA256, constant-time comparison, 1 MiB body cap, full audit.
 - Requests logged with method/path/status/duration/request-id; no PII in logs.
-- Known gaps (documented, not hidden): no per-IP rate limiting yet; no CSRF token
-  (mitigated by `SameSite=Lax` + JSON-only parsing); no key-rotation tooling.
+- Rate limiting is two-layered on the public routes: a source-address budget and
+  an independent subject budget keyed on a fingerprint of the tracking number.
+  Forwarding headers are believed **only** from `TRACKSPHERE_TRUSTED_PROXIES`;
+  chi's `RealIP` is removed because it trusts `X-Forwarded-For` from any peer,
+  which let a caller mint a fresh rate-limit bucket per request. See
+  [ADR 0010](adr/0010-abuse-posture.md).
+- Subscription consent: double opt-in for metered channels, per-shipment and
+  per-recipient caps enforced inside the transaction, an append-only audit
+  ledger, and an opt-out that never confirms whether an address was subscribed.
+- CORS allows `Authorization`; without it browser-based API-key calls failed
+  preflight while server-side clients worked.
+- CSP: no `unsafe-eval` in production, https-only `frame-ancestors` (so the
+  embeddable widget works and `DENY` does not block it), tenant logo origins
+  allowed in `img-src`, HSTS set.
+- Known gaps (documented, not hidden): no CSRF token (mitigated by
+  `SameSite=Lax` + JSON-only parsing); no key-rotation tooling; `unsafe-inline`
+  remains in `script-src` pending nonce support.
 
 ## 6. Frontend
 

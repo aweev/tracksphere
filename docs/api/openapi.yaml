@@ -325,6 +325,35 @@ paths:
                 properties:
                   data: { $ref: '#/components/schemas/Shipment' }
         '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [shipments]
+      summary: Update visibility and/or status
+      description: |
+        Private by default. Publish to the public portal with `{ "isPublic": true }`.
+        Returns 404 for foreign-tenant ids (no enumeration).
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              minProperties: 1
+              properties:
+                isPublic: { type: boolean, description: Publish to public portal }
+                status: { $ref: '#/components/schemas/Status' }
+      responses:
+        '200':
+          description: Updated shipment
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/Shipment' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
 
   /api/v1/shipments/{id}/events:
     get:
@@ -391,8 +420,556 @@ paths:
     post:
       tags: [alerts]
       summary: Mark an alert resolved
+      description: 'Idempotent. Returns 404 for foreign-tenant ids (no enumeration).'
       parameters:
         - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
       responses:
         '200': { description: Resolved }
+        '404': { $ref: '#/components/responses/NotFound' }
 
+  /api/v1/auth/sessions:
+    get:
+      tags: [auth]
+      summary: List active sessions for the caller
+      responses:
+        '200': { description: Sessions, newest first (no token hashes) }
+
+  /api/v1/auth/sessions/{id}:
+    delete:
+      tags: [auth]
+      summary: Revoke one session
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Revoked }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/auth/password/change:
+    post:
+      tags: [auth]
+      summary: Change password (revokes all other sessions)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [currentPassword, newPassword]
+              properties:
+                currentPassword: { type: string }
+                newPassword: { type: string, minLength: 8 }
+      responses:
+        '200': { description: Changed }
+        '401': { description: Current password incorrect }
+
+  /api/v1/shipments:batch:
+    post:
+      tags: [shipments]
+      summary: Bulk create (1..50), per-item results, Idempotency-Key supported
+      parameters:
+        - { in: header, name: Idempotency-Key, schema: { type: string } }
+      responses:
+        '207': { description: Multi-status with created count + per-item results }
+
+  /api/v1/team:
+    get:
+      tags: [auth]
+      summary: List tenant members (admin+)
+      responses:
+        '200': { description: Members }
+        '403': { description: Member role insufficient }
+
+  /api/v1/notifications:
+    get:
+      tags: [tracking]
+      summary: Notification delivery history for the caller's tenant
+      responses:
+        '200': { description: Newest first }
+
+  /api/v1/webhooks/inbox:
+    get:
+      tags: [webhooks]
+      summary: Inbound carrier delivery audit for the caller's tenant
+      responses:
+        '200': { description: Newest first, max 50 }
+
+  /api/v1/webhooks/out:
+    get:
+      tags: [webhooks]
+      summary: List outbound endpoints, secrets never listed (admin+)
+      responses:
+        '200': { description: Endpoints }
+    post:
+      tags: [webhooks]
+      summary: Create outbound endpoint (secret shown once, admin+)
+      responses:
+        '201': { description: Endpoint + one-time secret }
+
+  /api/v1/apikeys:
+    get:
+      tags: [auth]
+      summary: List tenant API keys, hashes never leave (admin+)
+      responses:
+        '200': { description: Keys }
+    post:
+      tags: [auth]
+      summary: Mint a key at or below your role (raw shown once, admin+)
+      responses:
+        '201': { description: Key id + one-time raw token }
+
+  /api/v1/jobs/dead:
+    get:
+      tags: [health]
+      summary: Dead-letter queue (admin+, cross-tenant ops surface)
+      responses:
+        '200': { description: Most recent dead jobs }
+
+  /api/v1/metrics:
+    get:
+      tags: [health]
+      summary: Prometheus exposition (queue depth, SSE, pool)
+      security: []
+      responses:
+        '200': { description: text/plain metrics }
+
+  /api/v1/billing:
+    get:
+      tags: [shipments]
+      summary: Plan, trial countdown and usage vs limits (register-copy truth)
+      responses:
+        '200': { description: plan + trialEndsAt + trialDaysLeft + usage + limits }
+
+  /api/v1/billing/checkout:
+    post:
+      tags: [auth]
+      summary: Stripe subscription checkout (admin+; 501 when unconfigured)
+      responses:
+        '200': { description: Checkout URL }
+        '501': { description: Contact sales }
+
+  /api/v1/billing/webhook:
+    post:
+      tags: [auth]
+      summary: Stripe event webhook (Stripe-Signature, no session)
+      security: []
+      responses:
+        '200': { description: Received }
+
+  /api/v1/analytics:
+    get:
+      tags: [shipments]
+      summary: On-time %, transit, carrier benchmark, lanes
+      responses:
+        '200': { description: Aggregates + carriers + lanes }
+
+  /api/v1/carriers:
+    get:
+      tags: [webhooks]
+      summary: Supported carrier slugs + tenant polling credentials (admin+)
+      responses:
+        '200': { description: supported + credentials }
+    post:
+      tags: [webhooks]
+      summary: Create/replace polling credentials, secrets sealed (admin+)
+      responses:
+        '200': { description: Credential id }
+
+  /api/v1/branding:
+    get:
+      tags: [tracking]
+      summary: Tenant brand for portal chrome
+      responses:
+        '200': { description: company/color/logo/support }
+    put:
+      tags: [tracking]
+      summary: Update brand (admin+)
+      responses:
+        '200': { description: Brand }
+
+  /api/v1/mcp:
+    post:
+      tags: [tracking]
+      summary: MCP JSON-RPC (initialize, tools/list, tools/call)
+      responses:
+        '200': { description: JSON-RPC result }
+
+  /api/v1/carriers/detect:
+    get:
+      tags: [webhooks]
+      summary: Shape-based carrier guess (UPS 1Z, FedEx digits, B/L)
+      parameters:
+        - { in: query, name: tracking, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Ordered guesses with confidence }
+
+  /api/v1/analytics/digest:
+    get:
+      tags: [shipments]
+      summary: Weekly ops digest (also emailed to owners Mondays)
+      responses:
+        '200': { description: Digest payload }
+
+  /api/v1/auth/sso/status:
+    get:
+      tags: [auth]
+      summary: Which SSO providers are live
+      security: []
+      responses:
+        '200': { description: '{google, microsoft}' }
+
+  /api/v1/compliance/evidence:
+    get:
+      tags: [health]
+      summary: SOC 2 evidence pack, live data (owner-only)
+      responses:
+        '200': { description: Controls + tenant stats + auth90d }
+
+  /api/v1/statusz:
+    get:
+      tags: [health]
+      summary: Public status payload (status, region, queue)
+      security: []
+      responses:
+        '200': { description: Status }
+
+
+  /api/v1/alerts/{id}/assign:
+    post:
+      tags: [alerts]
+      summary: Claim or hand an exception to a teammate
+      description: >
+        Ownership is not decoration. An exception with no assignee belongs to
+        nobody, so in a team nobody works it. Also accepts snoozeMinutes to
+        defer without closing, and an optional rootCause.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                userId: { type: string, format: uuid }
+                snoozeMinutes: { type: integer, minimum: 0, maximum: 43200 }
+                rootCause: { $ref: '#/components/schemas/AlertRootCause' }
+                note: { type: string, maxLength: 2000 }
+      responses:
+        '200': { description: Claimed }
+        '400': { description: Invalid root cause or snooze window, error: { $ref: '#/components/schemas/Error' } }
+        '404': { description: Not visible (no cross-tenant enumeration), error: { $ref: '#/components/schemas/Error' } }
+
+  /api/v1/alerts/{id}/note:
+    post:
+      tags: [alerts]
+      summary: Add an internal note and/or root cause to an open exception
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [note]
+              properties:
+                note: { type: string, maxLength: 2000 }
+                rootCause: { $ref: '#/components/schemas/AlertRootCause' }
+      responses:
+        '200': { description: Recorded }
+        '404': { description: Not visible, error: { $ref: '#/components/schemas/Error' } }
+
+  /api/v1/subscribe/confirm:
+    get:
+      tags: [tracking]
+      summary: Confirm a pending SMS/WhatsApp subscription
+      description: >
+        Double opt-in completion. Only after this does the subscription become
+        deliverable. Email subscriptions activate immediately; metered channels do
+        not, because an unverified phone number turns the platform into an
+        unsolicited-message relay.
+      security: []
+      parameters:
+        - in: query
+          name: token
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Confirmed }
+        '404': { description: Invalid, expired or already used, error: { $ref: '#/components/schemas/Error' } }
+
+  /api/v1/subscribe/unsubscribe:
+    post:
+      tags: [tracking]
+      summary: Opt out of all updates for an address (public, silent)
+      description: Always returns 200 so a one-click unsubscribe cannot leak whether the address was subscribed.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [channel, recipient]
+              properties:
+                channel: { $ref: '#/components/schemas/NotificationChannel' }
+                recipient: { type: string }
+      responses:
+        '200': { description: Accepted }
+
+  /api/v1/track/{trackingNumber}/stream:
+    get:
+      tags: [tracking]
+      summary: Server-Sent Events for one public shipment
+      description: >
+        Subscription is scoped server-side to exactly the shipment this tracking
+        number resolves to, and only for shipments with is_public=true. An
+        anonymous visitor can never observe another customer's events. Frames
+        carry a monotonic id so the browser can resume, plus retry and a 20s
+        heartbeat.
+      security: []
+      parameters:
+        - in: path
+          name: trackingNumber
+          required: true
+          schema: { type: string }
+        - in: header
+          name: Last-Event-ID
+          required: false
+          schema: { type: string }
+      responses:
+        '200':
+          description: text/event-stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                examples: [event: shipment.updated]
+        '404': { description: No public shipment for this tracking number, error: { $ref: '#/components/schemas/Error' } }
+
+  /api/v1/shipments:
+    get:
+      tags: [shipments]
+      summary: List shipments, risk-ordered by default
+      parameters:
+        - in: query
+          name: sort
+          schema: { type: string, enum: [risk, recent, stale, eta], default: risk }
+          description: >
+            risk orders by the read-model score, so the list is a to-do list
+            ordered by consequence rather than a database view ordered by status.
+        - in: query
+          name: riskTier
+          schema: { $ref: '#/components/schemas/RiskTier' }
+        - in: query
+          name: hasPosition
+          schema: { type: boolean, default: false }
+          description: Restrict to shipments with a known position, for the fleet map.
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 250, default: 25 }
+        - in: query
+          name: offset
+          schema: { type: integer, minimum: 0, default: 0 }
+        - in: query
+          name: status
+          schema: { $ref: '#/components/schemas/Status' }
+        - in: query
+          name: carrier
+          schema: { type: string }
+        - in: query
+          name: search
+          schema: { type: string }
+          description: Matches tracking number or reference.
+      responses:
+        '200':
+          description: Paged list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: array
+                    items: { $ref: '#/components/schemas/Shipment' }
+                  - type: object
+                    properties:
+                      meta: { $ref: '#/components/schemas/Meta' }
+
+components:
+  schemas:
+    Status:
+      type: string
+      enum: [booked, in_transit, at_customs, out_for_delivery, delivered, exception, cancelled]
+    Mode:
+      type: string
+      enum: [ocean, air, road, rail]
+    RiskTier:
+      type: string
+      enum: [clear, watch, at_risk, critical]
+      description: Display bucket for the 0-100 risk score. Higher is worse.
+    NotificationChannel:
+      type: string
+      enum: [email, sms, whatsapp]
+    ETASource:
+      type: string
+      enum: [none, carrier, estimated, lane_model]
+      description: >
+        Provenance for an arrival estimate. A carrier-published ETA and our own
+        estimate must never render identically — the first time an estimate is
+        wrong by a week, operators stop believing every number on screen.
+    AlertSeverity:
+      type: string
+      enum: [info, warning, critical]
+      description: >
+        info never interrupts an operator and never reaches a customer. Only
+        critical may interrupt, and only within the hourly budget.
+    AlertKind:
+      type: string
+      enum:
+        [delay, customs_hold, port_congestion, sla_breach, eta_revised,
+         disruption, delivery_failed, stale, dwell, dwell_critical, eta_slip, recurring]
+    AlertRootCause:
+      type: string
+      enum:
+        [documentation, customs_duty, customs_processing, carrier_delay,
+         port_congestion, weather, capacity, missed_connection, blank_sailing,
+         carrier_error, shipper_delay, other]
+      description: Closed taxonomy — free-text causes cannot be aggregated into carrier scorecards.
+    AlertResolution:
+      type: string
+      enum:
+        [condition_cleared, customer_notified, carrier_contacted, documents_filed,
+         delivered, duplicate, false_positive, wont_fix]
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code: { type: string }
+            message: { type: string }
+
+    Meta:
+      type: object
+      properties:
+        total: { type: integer, format: int64 }
+        limit: { type: integer }
+        page: { type: integer }
+
+    Tenant:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        slug: { type: string }
+        name: { type: string }
+        plan: { type: string }
+        timezone: { type: string, description: IANA zone; SLA targets and quiet hours are local to this. }
+        slaCriticalMinutes: { type: integer }
+        slaWarningMinutes: { type: integer }
+        slaInfoMinutes: { type: integer }
+
+    User:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        tenantId: { type: string, format: uuid }
+        email: { type: string, format: email }
+        name: { type: string }
+        role: { type: string, enum: [owner, admin, member] }
+        totpEnabled: { type: boolean }
+
+    Shipment:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        trackingNumber: { type: string }
+        reference: { type: string }
+        carrier: { type: string }
+        mode: { $ref: '#/components/schemas/Mode' }
+        origin: { type: string }
+        destination: { type: string }
+        status: { $ref: '#/components/schemas/Status' }
+        eta: { type: string, format: date-time }
+        shippedAt: { type: string, format: date-time }
+        deliveredAt: { type: string, format: date-time }
+        isPublic: { type: boolean }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        riskScore: { type: integer, minimum: 0, maximum: 100 }
+        riskTier: { $ref: '#/components/schemas/RiskTier' }
+        staleHours: { type: number, description: Hours since the last carrier scan. }
+        openAlerts: { type: integer }
+        criticalAlerts: { type: integer }
+        etaSource: { $ref: '#/components/schemas/ETASource' }
+        etaConfidence: { type: number, minimum: 0, maximum: 1 }
+        valueAtRisk: { type: number }
+        customerNotified: { type: boolean }
+        dwellHours: { type: number }
+        expectedDwellHours: { type: number }
+        dwellRatio: { type: number }
+        lat: { type: number }
+        lng: { type: number }
+
+    ShipmentEvent:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        shipmentId: { type: string, format: uuid }
+        carrier: { type: string }
+        code: { type: string, description: Carrier event code, e.g. CUSTOMS_HOLD. }
+        description: { type: string }
+        location: { type: string }
+        lat: { type: number }
+        lng: { type: number }
+        occurredAt: { type: string, format: date-time, description: When the carrier says it happened. }
+        receivedAt: { type: string, format: date-time, description: When we ingested it; may be much later. }
+        source: { type: string, enum: [webhook, manual, poll] }
+
+    Alert:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        shipmentId: { type: string, format: uuid }
+        kind: { $ref: '#/components/schemas/AlertKind' }
+        severity: { $ref: '#/components/schemas/AlertSeverity' }
+        title: { type: string }
+        message: { type: string }
+        status: { type: string, enum: [open, resolved] }
+        createdAt: { type: string, format: date-time }
+        resolvedAt: { type: string, format: date-time }
+        assignedTo: { type: string, format: uuid }
+        assignedToName: { type: string }
+        assignedAt: { type: string, format: date-time }
+        acknowledgedAt: { type: string, format: date-time }
+        dueAt: { type: string, format: date-time, description: SLA deadline, set from the tenant's severity target when raised. }
+        escalatedAt: { type: string, format: date-time }
+        snoozedUntil: { type: string, format: date-time }
+        rootCause: { $ref: '#/components/schemas/AlertRootCause' }
+        note: { type: string }
+        resolution: { $ref: '#/components/schemas/AlertResolution' }
+        valueAtRisk: { type: number }
+        detectedAt: { type: string, format: date-time }
+        lastSeenAt: { type: string, format: date-time, description: Last sweep that confirmed the condition still holds. }
+        riskScore: { type: integer }
+        riskTier: { $ref: '#/components/schemas/RiskTier' }
+        staleHours: { type: number }
+        openAlertCount: { type: integer }
+        customerNotified: { type: boolean }
+        trackingNumber: { type: string }
+        shipmentStatus: { $ref: '#/components/schemas/Status' }
+        shipmentEta: { type: string, format: date-time }
+
+    DashboardStats:
+      type: object
+      properties:
+        activeShipments: { type: integer }
+        deliveredShipments: { type: integer }
+        exceptionShipments: { type: integer }
+        overdueShipments: { type: integer }
+        openAlerts: { type: integer }

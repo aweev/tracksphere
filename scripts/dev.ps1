@@ -66,6 +66,10 @@ switch ($Task) {
   'rls-test' {
     Get-Content 'scripts/rls_test.sql' -Raw |
       docker exec -i $Container psql -U tracksphere_app -d tracksphere -v ON_ERROR_STOP=1
+    # Schema invariants need the OWNER role (they create probe tenants, which
+    # the app role correctly cannot do). Kept in a separate script on purpose.
+    Get-Content 'scripts/schema_test.sql' -Raw |
+      docker exec -i $Container psql -U tracksphere -d tracksphere -v ON_ERROR_STOP=1
   }
   'build' { go build -o bin/ ./cmd/... ; Write-Host 'binaries in ./bin' }
   'test' { go test ./... -count=1 }

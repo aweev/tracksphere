@@ -46,6 +46,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			&passwordHash, &totpSecret, &user.TOTPEnabled, &active, &user.CreatedAt)
 	// Uniform error for unknown email vs bad password (no user enumeration).
 	if err != nil || !active || !auth.VerifyPassword(passwordHash, req.Password) {
+		s.auditEvent(r.Context(), nil, nil, req.Email, "login_failed", r)
 		writeError(w, http.StatusUnauthorized, "bad_credentials", "Invalid email or password")
 		return
 	}
@@ -68,6 +69,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			s.domainError(w, err)
 			return
 		}
+		s.auditEvent(r.Context(), &user.TenantID, &user.ID, user.Email, "mfa_challenge", r)
 		writeJSON(w, http.StatusOK, map[string]any{
 			"mfaRequired": true,
 			"challenge":   challenge,
@@ -84,6 +86,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		s.domainError(w, err)
 		return
 	}
+	s.auditEvent(r.Context(), &user.TenantID, &user.ID, user.Email, "login", r)
 	s.setSessionCookie(w, token)
 	writeJSON(w, http.StatusOK, map[string]any{"user": user})
 }
@@ -123,8 +126,9 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	secretBytes, err := auth.Open(s.cfg.SecretKey, secretSealed)
+	secretBytes, err := auth.OpenMulti(s.cfg.SecretKeys, secretSealed)
 	if err != nil || !auth.VerifyTOTP(string(secretBytes), req.Code) {
+		s.auditEvent(r.Context(), &user.TenantID, &user.ID, user.Email, "mfa_failed", r)
 		writeError(w, http.StatusUnauthorized, "bad_code", "Incorrect verification code")
 		return
 	}
@@ -150,6 +154,7 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 		s.domainError(w, err)
 		return
 	}
+	s.auditEvent(r.Context(), &user.TenantID, &user.ID, user.Email, "mfa_verified", r)
 	s.setSessionCookie(w, token)
 	writeJSON(w, http.StatusOK, map[string]any{"user": user})
 }

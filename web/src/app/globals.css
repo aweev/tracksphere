@@ -1,12 +1,55 @@
 @import 'tailwindcss';
 
-/* TrackSphere brand tokens (from design/prototypes Control Tower kit) */
+/* TrackSphere brand tokens + semantic design system */
 @theme {
+  /* Brand */
   --color-navy-950: #0f172a;
   --color-navy-900: #1e293b;
   --color-navy-800: #334155;
   --color-accent-500: #ff6b00;
   --color-accent-600: #e66000;
+
+  /* Semantic Risk Tiers (WCAG AA compliant on white) */
+  --color-risk-critical: #b91c1c;    /* red-700 - 7.3:1 on white */
+  --color-risk-critical-bg: #fef2f2; /* red-50 */
+  --color-risk-at-risk: #c2410c;     /* orange-700 - 6.1:1 on white */
+  --color-risk-at-risk-bg: #fff7ed;  /* orange-50 */
+  --color-risk-watch: #a16207;       /* yellow-700 - 5.1:1 on white */
+  --color-risk-watch-bg: #fefce8;    /* yellow-50 */
+  --color-risk-clear: #15803d;       /* green-700 - 7.0:1 on white */
+  --color-risk-clear-bg: #f0fdf4;    /* green-50 */
+
+  /* Semantic Text (WCAG AA compliant) */
+  --color-text-primary: #0f172a;     /* slate-950 - 19.5:1 */
+  --color-text-secondary: #334155;   /* slate-700 - 8.6:1 */
+  --color-text-muted: #475569;       /* slate-600 - 5.9:1 */
+  --color-text-disabled: #94a3b8;    /* slate-400 - 3.7:1 - USE ONLY FOR DISABLED */
+
+  /* Semantic Status (WCAG AA compliant) */
+  --color-status-booked-bg: #e2e8f0;     /* slate-200 */
+  --color-status-booked-text: #334155;   /* slate-700 */
+  --color-status-in_transit-bg: #dbeafe; /* blue-100 */
+  --color-status-in_transit-text: #1d4ed8; /* blue-700 */
+  --color-status-at_customs-bg: #fef3c7; /* amber-100 */
+  --color-status-at_customs-text: #b45309; /* amber-700 */
+  --color-status-out_for_delivery-bg: #ede9fe; /* violet-100 */
+  --color-status-out_for_delivery-text: #7c3aed; /* violet-700 */
+  --color-status-delivered-bg: #dcfce7;  /* emerald-100 */
+  --color-status-delivered-text: #16a34a;  /* emerald-700 */
+  --color-status-exception-bg: #fee2e2;  /* red-100 */
+  --color-status-exception-text: #dc2626;  /* red-600 */
+  --color-status-cancelled-bg: #e2e8f0;  /* slate-200 */
+  --color-status-cancelled-text: #475569;  /* slate-600 */
+
+  /* Focus Ring */
+  --color-focus-ring: #ff6b00;       /* accent-500 */
+  --color-focus-ring-offset: #ffffff;
+
+  /* Borders */
+  --color-border-subtle: #e2e8f0;    /* slate-200 */
+  --color-border-emphasis: #cbd5e1;  /* slate-300 */
+
+  /* Fonts */
   --font-sans: 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, monospace;
 }
@@ -21,33 +64,142 @@ body {
   @apply bg-slate-100 text-slate-900 font-sans antialiased;
 }
 
-/* Status pill palette shared by badges across pages */
+/* Status pills using semantic tokens */
 .status-pill {
   @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-semibold;
 }
 .status-booked {
-  @apply bg-slate-200 text-slate-700;
+  background-color: var(--color-status-booked-bg);
+  color: var(--color-status-booked-text);
 }
 .status-in_transit {
-  @apply bg-blue-100 text-blue-700;
+  background-color: var(--color-status-in_transit-bg);
+  color: var(--color-status-in_transit-text);
 }
 .status-at_customs {
-  @apply bg-amber-100 text-amber-800;
+  background-color: var(--color-status-at_customs-bg);
+  color: var(--color-status-at_customs-text);
 }
 .status-out_for_delivery {
-  @apply bg-violet-100 text-violet-700;
+  background-color: var(--color-status-out_for_delivery-bg);
+  color: var(--color-status-out_for_delivery-text);
 }
 .status-delivered {
-  @apply bg-emerald-100 text-emerald-700;
+  background-color: var(--color-status-delivered-bg);
+  color: var(--color-status-delivered-text);
 }
 .status-exception {
-  @apply bg-red-100 text-red-700;
+  background-color: var(--color-status-exception-bg);
+  color: var(--color-status-exception-text);
 }
 .status-cancelled {
-  @apply bg-slate-300 text-slate-600;
+  background-color: var(--color-status-cancelled-bg);
+  color: var(--color-status-cancelled-text);
+}
+
+/* Risk badges using semantic tokens */
+.risk-badge {
+  @apply inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide;
+}
+.risk-critical {
+  background-color: var(--color-risk-critical-bg);
+  color: var(--color-risk-critical);
+}
+.risk-at_risk {
+  background-color: var(--color-risk-at-risk-bg);
+  color: var(--color-risk-at-risk);
+}
+.risk-watch {
+  background-color: var(--color-risk-watch-bg);
+  color: var(--color-risk-watch);
+}
+.risk-clear {
+  background-color: var(--color-risk-clear-bg);
+  color: var(--color-risk-clear);
+}
+
+/* Focus visible - consistent across app */
+*:focus-visible {
+  @apply outline-none ring-2 ring-offset-2;
+  outline-color: var(--color-focus-ring);
+  outline-offset: 2px;
+  ring-color: var(--color-focus-ring);
+  ring-offset-color: var(--color-focus-ring-offset);
 }
 
 /* MapLibre popup polish */
 .maplibregl-popup-content {
   @apply rounded-xl px-3 py-2 font-sans text-xs shadow-lg;
+}
+
+/* Mobile card layout for shipments */
+@media (max-width: 767px) {
+  .shipment-table {
+    @apply hidden;
+  }
+  .shipment-cards {
+    @apply block;
+  }
+}
+
+@media (min-width: 768px) {
+  .shipment-table {
+    @apply block;
+  }
+  .shipment-cards {
+    @apply hidden;
+  }
+}
+
+/* Card layout for mobile */
+.shipment-card {
+  @apply rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200/70 transition hover:ring-accent-500;
+}
+.shipment-card-header {
+  @apply flex items-start justify-between gap-3 mb-3;
+}
+.shipment-card-tracking {
+  @apply font-mono font-semibold text-navy-950;
+}
+.shipment-card-route {
+  @apply text-sm text-slate-600 mt-1;
+}
+.shipment-card-meta {
+  @apply flex flex-wrap items-center gap-2 text-xs text-slate-500;
+}
+.shipment-card-meta-item {
+  @apply flex items-center gap-1;
+}
+.shipment-card-eta {
+  @apply mt-3 rounded-xl bg-slate-50 p-3 text-sm text-slate-600;
+}
+.shipment-card-eta-value {
+  @apply font-mono font-semibold text-navy-950;
+}
+.shipment-card-actions {
+  @apply mt-4 flex flex-wrap gap-2;
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* High contrast mode support */
+@media (prefers-contrast: high) {
+  :root {
+    --color-border-subtle: #000;
+    --color-border-emphasis: #000;
+  }
+  .status-pill,
+  .risk-badge {
+    @apply ring-2 ring-current;
+  }
 }

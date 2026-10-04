@@ -5,6 +5,8 @@ package db
 import (
 	"context"
 	"fmt"
+	"os"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -14,15 +16,32 @@ import (
 
 // Open builds a pool and verifies connectivity, retrying for up to ~30s so
 // that API/worker can start while the database container is still booting.
-func Open(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
+// Pool size is tunable via TRACKSPHERE_DB_MAX_CONNS (default: calculated from
+// worker/API concurrency); every connection sets statement_timeout=5s as a
+// runaway-query guard (the role default in 000009 is belt-and-braces for
+// non-pool clients).
+func Open(ctx context.Context, dsn string, workerConcurrency, apiWorkers int) (*pgxpool.Pool, error) {
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("parse database url: %w", err)
 	}
-	cfg.MaxConns = 10
+	maxConns := 10
+	if raw := os.Getenv("TRACKSPHERE_DB_MAX_CONNS"); raw != "" {
+		if n, cerr := strconv.Atoi(raw); cerr == nil && n >= 1 && n <= 500 {
+			maxConns = n
+		}
+	} else {
+		// Auto-calculate recommended pool size
+		maxConns = calculateRecommendedPoolSize(workerConcurrency, apiWorkers)
+	}
+	cfg.MaxConns = int32(maxConns)
 	cfg.MinConns = 1
 	cfg.MaxConnLifetime = time.Hour
 	cfg.MaxConnIdleTime = 15 * time.Minute
+	cfg.AfterConnect = func(ctx context.Context, c *pgx.Conn) error {
+		_, err := c.Exec(ctx, `SET statement_timeout = '5s'`)
+		return err
+	}
 
 	var pool *pgxpool.Pool
 	deadline := time.Now().Add(30 * time.Second)
@@ -52,6 +71,59 @@ func Open(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 			return nil, ctx.Err()
 		case <-time.After(backoff):
 		}
+	}
+}
+
+// CalculateRecommendedPoolSize returns the recommended max connections based on
+// the application's concurrency requirements.
+// Formula: (API workers + worker pollers + background tasks) × safety factor
+// Default safety factor = 2
+func CalculateRecommendedPoolSize(workerConcurrency int, apiWorkers int) int {
+	// API needs connections for HTTP handlers + SSE hub + metrics
+	apiConns := apiWorkers + 2 // +2 for SSE hub, metrics
+	
+	// Worker needs connections for pollers + reaper + archiver + LISTEN + scheduler
+	workerConns := workerConcurrency + 4 // +4 for background tasks
+	
+	// Total with safety factor
+	total := (apiConns + workerConns) * 2
+	
+	// Cap at reasonable maximum
+	if total > 100 {
+		total = 100
+	}
+	if total < 10 {
+		total = 10
+	}
+	return total
+}
+
+// PoolStats holds extended pool statistics for monitoring
+type PoolStats struct {
+	AcquiredConns  int32
+	IdleConns      int32
+	TotalConns     int32
+	MaxConns       int32
+	UtilizationPct float64
+}
+
+// GetPoolStats returns extended statistics for the pool
+func GetPoolStats(pool *pgxpool.Pool) PoolStats {
+	if pool == nil {
+		return PoolStats{}
+	}
+	stats := pool.Stat()
+	utilization := float64(0)
+	maxConns := stats.MaxConns()
+	if maxConns > 0 {
+		utilization = float64(stats.AcquiredConns()) / float64(maxConns) * 100
+	}
+	return PoolStats{
+		AcquiredConns:  stats.AcquiredConns(),
+		IdleConns:      stats.IdleConns(),
+		TotalConns:     stats.TotalConns(),
+		MaxConns:       maxConns,
+		UtilizationPct: utilization,
 	}
 }
 
@@ -133,4 +205,28 @@ func ClearSystem(ctx context.Context, q querier) error {
 		return fmt.Errorf("clear system context: %w", err)
 	}
 	return nil
+}
+
+// calculateRecommendedPoolSize returns the recommended max connections based on
+// the application's concurrency requirements.
+// Formula: (API workers + worker pollers + background tasks) × safety factor
+// Default safety factor = 2
+func calculateRecommendedPoolSize(workerConcurrency, apiWorkers int) int {
+	// API needs connections for HTTP handlers + SSE hub + metrics
+	apiConns := apiWorkers + 2 // +2 for SSE hub, metrics
+	
+	// Worker needs connections for pollers + reaper + archiver + LISTEN + scheduler
+	workerConns := workerConcurrency + 4 // +4 for background tasks
+	
+	// Total with safety factor
+	total := (apiConns + workerConns) * 2
+	
+	// Cap at reasonable maximum
+	if total > 100 {
+		total = 100
+	}
+	if total < 10 {
+		total = 10
+	}
+	return total
 }

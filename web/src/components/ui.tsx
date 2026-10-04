@@ -14,8 +14,23 @@ const labels: Record<ShipmentStatus, string> = {
 export function StatusPill({ status }: { status: ShipmentStatus }) {
   return (
     <span className={`status-pill status-${status}`}>
-      <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70" />
+      <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70" aria-hidden="true" />
       {labels[status]}
+    </span>
+  );
+}
+
+export function RiskBadge({
+  tier,
+  score,
+}: {
+  tier: 'critical' | 'at_risk' | 'watch' | 'clear';
+  score?: number;
+}) {
+  return (
+    <span className={`risk-badge risk-${tier}`} aria-label={`Risk ${tier.replace('_', ' ')} ${score ? `score ${score}` : ''}`}>
+      {tier.replace('_', ' ')}
+      {score !== undefined ? ` · ${score}` : ''}
     </span>
   );
 }
@@ -46,10 +61,12 @@ export function StatTile({
   label,
   value,
   tone = 'default',
+  href,
 }: {
   label: string;
   value: number;
   tone?: 'default' | 'accent' | 'danger' | 'success';
+  href?: string;
 }) {
   const tones = {
     default: 'text-navy-950',
@@ -57,19 +74,34 @@ export function StatTile({
     danger: 'text-red-600',
     success: 'text-emerald-600',
   };
-  return (
-    <div className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-200/70">
+  const body = (
+    <>
       <div className={`text-3xl font-extrabold ${tones[tone]}`}>{value}</div>
       <div className="mt-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
         {label}
       </div>
+    </>
+  );
+  if (href) {
+    return (
+      <Link
+        href={href}
+        className="block rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-200/70 transition hover:ring-accent-500 focus-visible:ring-2 focus-visible:ring-accent-500"
+      >
+        {body}
+      </Link>
+    );
+  }
+  return (
+    <div className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-200/70">
+      {body}
     </div>
   );
 }
 
 export function Empty({ message }: { message: string }) {
   return (
-    <div className="rounded-2xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500">
+    <div className="rounded-2xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-600" role="status">
       {message}
     </div>
   );
@@ -77,7 +109,7 @@ export function Empty({ message }: { message: string }) {
 
 export function BackLink({ href, children }: { href: string; children: React.ReactNode }) {
   return (
-    <Link href={href} className="text-sm font-semibold text-slate-400 hover:text-accent-500">
+    <Link href={href} className="text-sm font-semibold text-slate-500 hover:text-accent-500 focus-visible:ring-2 focus-visible:ring-accent-500 rounded">
       {children}
     </Link>
   );

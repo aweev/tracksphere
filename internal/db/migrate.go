@@ -21,7 +21,7 @@ const migrationLockID int64 = 0x5452414b535048 // "TRACKSPH"
 // once each, under a Postgres advisory lock so concurrent api/worker boots
 // cannot race. Migrations are plain SQL files named 000001_description.sql.
 func Migrate(ctx context.Context, migrationsURL string) error {
-	pool, err := Open(ctx, migrationsURL)
+	pool, err := Open(ctx, migrationsURL, 4, 1)
 	if err != nil {
 		return err
 	}

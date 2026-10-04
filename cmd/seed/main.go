@@ -34,7 +34,7 @@ func main() {
 	if err := db.Migrate(ctx, cfg.MigrationsURL); err != nil {
 		fatal("migrate", err)
 	}
-	pool, err := db.Open(ctx, cfg.DatabaseURL)
+	pool, err := db.Open(ctx, cfg.DatabaseURL, cfg.WorkerConcurrency, cfg.APIWorkers)
 	if err != nil {
 		fatal("connect", err)
 	}
@@ -43,6 +43,9 @@ func main() {
 	// --reset: delete demo tenant under the system flag (bootstrap path —
 	// no tenant context exists for a row we're about to remove).
 	if reset {
+		if cfg.Env == "production" {
+			fatal("reset", fmt.Errorf("refusing --reset in production (would delete tenant %q)", demoSlug))
+		}
 		if err := withSystem(ctx, pool, func(tx pgx.Tx) error {
 			_, err := tx.Exec(ctx, `DELETE FROM tenants WHERE slug=$1`, demoSlug)
 			return err
@@ -64,7 +67,7 @@ func main() {
 		return
 	}
 
-	tenantID, err := seedTenantAndUsers(ctx, pool, cfg.SecretKey)
+	tenantID, err := seedTenantAndUsers(ctx, pool, cfg.SecretKeys)
 	if err != nil {
 		fatal("tenant", err)
 	}
@@ -79,7 +82,7 @@ func main() {
 // seedTenantAndUsers creates the demo org plus owner and member accounts.
 // The owner has a known TOTP secret (sealed) with MFA DISABLED so local login
 // works without an authenticator; flip totp_enabled manually to test MFA.
-func seedTenantAndUsers(ctx context.Context, pool *pgxpool.Pool, secretKey []byte) (uuid.UUID, error) {
+func seedTenantAndUsers(ctx context.Context, pool *pgxpool.Pool, secretKeys [][]byte) (uuid.UUID, error) {
 	var tenantID uuid.UUID
 	// Tenant creation is a bootstrap write: system flag, no tenant context.
 	err := withSystem(ctx, pool, func(tx pgx.Tx) error {
@@ -110,7 +113,7 @@ func seedTenantAndUsers(ctx context.Context, pool *pgxpool.Pool, secretKey []byt
 		}
 		// Well-known dev-only TOTP secret (sealed with the same key the API
 		// uses so MFA can be enabled against it). totp_enabled stays false.
-		sealed, err := auth.Seal(secretKey, []byte("JBSWY3DPEHPK3PXP"))
+		sealed, err := auth.SealMulti(secretKeys, []byte("JBSWY3DPEHPK3PXP"))
 		if err != nil {
 			return uuid.Nil, err
 		}

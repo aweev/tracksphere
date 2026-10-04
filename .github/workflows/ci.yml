@@ -1,0 +1,159 @@
+name: ci
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  backend:
+    name: backend (vet + test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: true
+      - run: go vet ./...
+      - run: go test ./... -count=1
+
+  web:
+    name: web (typecheck + build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+
+  db:
+    name: db (migrate + seed + rls)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: tracksphere
+          POSTGRES_PASSWORD: tracksphere
+          POSTGRES_DB: tracksphere
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U tracksphere -d tracksphere"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      TRACKSPHERE_ENV: local
+      TRACKSPHERE_DATABASE_URL: postgres://tracksphere_app:tracksphere_app@localhost:5432/tracksphere?sslmode=disable
+      TRACKSPHERE_MIGRATIONS_URL: postgres://tracksphere:tracksphere@localhost:5432/tracksphere?sslmode=disable
+      TRACKSPHERE_SECRET_KEY: local-dev-secret-key-change-me-000000000000000000
+      TRACKSPHERE_CARRIER_WEBHOOK_SECRET: dev-carrier-webhook-secret
+      PGPASSWORD: tracksphere
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: true
+      - name: Wait for postgres
+        run: |
+          for i in $(seq 1 30); do
+            pg_isready -h localhost -U tracksphere -d tracksphere && break
+            sleep 2
+          done
+          pg_isready -h localhost -U tracksphere -d tracksphere
+      - name: Migrate (owner role)
+        run: go run ./cmd/migrate
+      - name: Seed demo data (app role + owner migrations URL)
+        run: go run ./cmd/seed
+      - name: RLS isolation proof (restricted role)
+        run: psql -h localhost -U tracksphere_app -d tracksphere -v ON_ERROR_STOP=1 -f scripts/rls_test.sql
+      - name: Schema invariants (owner role)
+        run: psql -h localhost -U tracksphere -d tracksphere -v ON_ERROR_STOP=1 -f scripts/schema_test.sql
+      - name: Assert latest migration
+        run: go run ./cmd/migrate --version
+
+  e2e:
+    name: e2e (full stack)
+    runs-on: ubuntu-latest
+    needs: [backend, web, db]
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: tracksphere
+          POSTGRES_PASSWORD: tracksphere
+          POSTGRES_DB: tracksphere
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U tracksphere -d tracksphere"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      TRACKSPHERE_ENV: local
+      TRACKSPHERE_DATABASE_URL: postgres://tracksphere_app:tracksphere_app@localhost:5432/tracksphere?sslmode=disable
+      TRACKSPHERE_MIGRATIONS_URL: postgres://tracksphere:tracksphere@localhost:5432/tracksphere?sslmode=disable
+      TRACKSPHERE_SECRET_KEY: local-dev-secret-key-change-me-000000000000000000
+      TRACKSPHERE_CARRIER_WEBHOOK_SECRET: dev-carrier-webhook-secret
+      TRACKSPHERE_PUBLIC_URL: http://localhost:8080
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: true
+      - name: Wait for postgres
+        run: |
+          for i in $(seq 1 30); do
+            pg_isready -h localhost -U tracksphere -d tracksphere && break
+            sleep 2
+          done
+          pg_isready -h localhost -U tracksphere -d tracksphere
+      - name: Migrate + seed
+        run: |
+          go run ./cmd/migrate
+          go run ./cmd/seed
+      # The e2e script drives the API and worker directly rather than the
+      # Next.js proxy: it exercises ingestion, the queue, the rules engine, the
+      # notification router and the SSE hub, which is where the product risk is.
+      # The web build is already gated by the `web` job.
+      - name: Start API and worker
+        run: |
+          go build -o /tmp/trackapi ./cmd/api
+          go build -o /tmp/trackworker ./cmd/worker
+          (/tmp/trackworker > /tmp/worker.log 2>&1 &)
+          (/tmp/trackapi > /tmp/api.log 2>&1 &)
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:8080/api/v1/health && break
+            sleep 1
+          done
+          curl -sf http://localhost:8080/api/v1/health
+      - name: E2E assertions
+        run: pwsh scripts/e2e.ps1
+      - name: Worker and API logs on failure
+        if: failure()
+        run: |
+          echo "--- worker ---"; cat /tmp/worker.log || true
+          echo "--- api ---";    cat /tmp/api.log || true
+      - name: Sweep ran and reconciled
+        # The exception engine is time-based. Prove the sweep actually executes
+        # on a fresh stack rather than only registering cleanly.
+        run: |
+          go run ./cmd/migrate
+          pwsh -NoProfile -Command "
+            \$env:PGPASSWORD='tracksphere'
+            psql -h localhost -U tracksphere -d tracksphere -tAc \
+              \"SELECT count(*) FROM alert_rules WHERE name='No carrier update'\"
+          " | grep -q '[1-9]'

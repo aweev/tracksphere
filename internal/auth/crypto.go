@@ -15,8 +15,6 @@ import (
 	"io"
 )
 
-// ── Password hashing (argon2id, PHC string format) ─────────────────────
-
 const (
 	argonTime    = 1
 	argonMemory  = 64 * 1024 // KiB
@@ -25,7 +23,6 @@ const (
 	argonSaltLen = 16
 )
 
-// HashPassword returns a PHC-encoded argon2id hash: $argon2id$v=19$m=...,t=...,p=...
 func HashPassword(password string) (string, error) {
 	if len(password) < 8 {
 		return "", errors.New("password must be at least 8 characters")
@@ -42,8 +39,6 @@ func HashPassword(password string) (string, error) {
 	), nil
 }
 
-// VerifyPassword reports whether password matches the stored PHC hash.
-// Comparison is constant-time.
 func VerifyPassword(hash, password string) bool {
 	salt, key, time, memory, threads, err := decodePHC(hash)
 	if err != nil {
@@ -53,10 +48,6 @@ func VerifyPassword(hash, password string) bool {
 	return subtle.ConstantTimeCompare(candidate, key) == 1
 }
 
-// ── Session tokens ─────────────────────────────────────────────────────
-
-// NewSessionToken returns a 32-byte random token (base64url) and its
-// SHA-256 hash. Only the hash is persisted; the raw token is the cookie value.
 func NewSessionToken() (raw string, hash []byte, err error) {
 	buf := make([]byte, 32)
 	if _, err = rand.Read(buf); err != nil {
@@ -67,15 +58,74 @@ func NewSessionToken() (raw string, hash []byte, err error) {
 	return raw, sum[:], nil
 }
 
-// HashToken returns the SHA-256 hash of a raw token for DB lookup.
 func HashToken(raw string) []byte {
 	sum := sha256.Sum256([]byte(raw))
 	return sum[:]
 }
 
-// ── AES-256-GCM sealing (TOTP secrets at rest) ─────────────────────────
+// Seal encrypts plaintext with the PRIMARY key (first in SecretKeys).
+// Output format: base64(key-index || nonce || ciphertext).
+// key-index is a single byte identifying which key was used for encryption.
+func SealMulti(secretKeys [][]byte, plaintext []byte) (string, error) {
+	if len(secretKeys) == 0 {
+		return "", errors.New("no secret keys available")
+	}
+	primaryKey := secretKeys[0]
+	block, err := newCipher(primaryKey)
+	if err != nil {
+		return "", err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return "", err
+	}
+	sealed := gcm.Seal(nil, nonce, plaintext, nil)
+	// Prepend key index (0 for primary) + nonce
+	output := make([]byte, 1+len(nonce)+len(sealed))
+	output[0] = 0 // key index
+	copy(output[1:], nonce)
+	copy(output[1+len(nonce):], sealed)
+	return base64.StdEncoding.EncodeToString(output), nil
+}
 
-// Seal encrypts plaintext with a key derived from secretKey.
+// Open reverses SealMulti, trying all keys in SecretKeys for decryption.
+// This enables zero-downtime key rotation: old keys remain valid for decryption
+// while new data is encrypted with the primary key.
+func OpenMulti(secretKeys [][]byte, sealed string) ([]byte, error) {
+	data, err := base64.StdEncoding.DecodeString(sealed)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) < 2 {
+		return nil, errors.New("sealed payload too short")
+	}
+	keyIndex := int(data[0])
+	if keyIndex >= len(secretKeys) {
+		return nil, fmt.Errorf("key index %d out of range (have %d keys)", keyIndex, len(secretKeys))
+	}
+	key := secretKeys[keyIndex]
+	block, err := newCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	nonceSize := gcm.NonceSize()
+	if len(data) < 1+nonceSize {
+		return nil, errors.New("sealed payload too short for nonce")
+	}
+	nonce := data[1 : 1+nonceSize]
+	ciphertext := data[1+nonceSize:]
+	return gcm.Open(nil, nonce, ciphertext, nil)
+}
+
+// Seal encrypts plaintext with a single secret key (legacy, single-key mode).
 // Output format: base64(nonce || ciphertext).
 func Seal(secretKey, plaintext []byte) (string, error) {
 	block, err := newCipher(secretKey)
@@ -94,7 +144,7 @@ func Seal(secretKey, plaintext []byte) (string, error) {
 	return base64.StdEncoding.EncodeToString(sealed), nil
 }
 
-// Open reverses Seal.
+// Open reverses Seal (legacy single-key mode).
 func Open(secretKey []byte, sealed string) ([]byte, error) {
 	block, err := newCipher(secretKey)
 	if err != nil {
@@ -118,7 +168,6 @@ func newCipher(secretKey []byte) (cipher.Block, error) {
 	if len(secretKey) == 0 {
 		return nil, errors.New("empty secret key")
 	}
-	// Derive a stable 32-byte key so operators may pass any passphrase.
 	sum := sha256.Sum256(secretKey)
 	return aes.NewCipher(sum[:])
 }

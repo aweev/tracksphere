@@ -61,6 +61,7 @@ type CreateInput struct {
 	Mode           string
 	Origin         string
 	Destination    string
+	IsPublic       *bool
 }
 
 // ErrInvalidInput marks validation failures surfaced as HTTP 400.
@@ -80,18 +81,27 @@ func (in CreateInput) Validate() error {
 	return nil
 }
 
-// Create inserts a shipment for tenantID.
+// Create inserts a shipment for tenantID. New shipments are private unless
+// IsPublic is explicitly set (secure default since 000006).
 func (r *Repository) Create(ctx context.Context, tenantID, userID uuid.UUID, in CreateInput) (*model.Shipment, error) {
 	var out *model.Shipment
 	err := db.WithTenant(ctx, r.pool, tenantID, func(tx pgx.Tx) error {
+		isPublic := false
+		if in.IsPublic != nil {
+			isPublic = *in.IsPublic
+		}
+		var createdBy any = userID
+		if userID == uuid.Nil {
+			createdBy = nil // system paths (commerce webhooks) have no user
+		}
 		row := tx.QueryRow(ctx, `
 			INSERT INTO shipments
 				(tenant_id, tracking_number, reference, carrier, mode,
-				 origin, destination, status, created_by)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,'booked',$8)
+				 origin, destination, status, is_public, created_by)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,'booked',$8,$9)
 			RETURNING `+shipmentCols,
 			tenantID, strings.TrimSpace(in.TrackingNumber), in.Reference,
-			in.Carrier, in.Mode, in.Origin, in.Destination, userID)
+			in.Carrier, in.Mode, in.Origin, in.Destination, isPublic, createdBy)
 		s, err := scanShipment(row)
 		if err != nil {
 			return err
@@ -111,6 +121,53 @@ func (r *Repository) Get(ctx context.Context, tenantID, id uuid.UUID) (*model.Sh
 	err := db.WithTenant(ctx, r.pool, tenantID, func(tx pgx.Tx) error {
 		s, err := scanShipment(tx.QueryRow(ctx,
 			`SELECT `+shipmentCols+` FROM shipments WHERE id=$1`, id))
+		if err != nil {
+			return err
+		}
+		out = s
+		return nil
+	})
+	return out, err
+}
+
+// UpdateInput is the mutable subset for PATCH /shipments/{id}.
+// Pointers distinguish "absent" from zero values.
+type UpdateInput struct {
+	IsPublic *bool
+	Status   *string
+}
+
+// Validate checks UpdateInput against domain rules.
+func (in UpdateInput) Validate() error {
+	if in.IsPublic == nil && in.Status == nil {
+		return fmt.Errorf("%w: nothing to update (isPublic, status)", ErrInvalidInput)
+	}
+	if in.Status != nil && !model.ValidStatus(*in.Status) {
+		return fmt.Errorf("%w: unknown status %q", ErrInvalidInput, *in.Status)
+	}
+	return nil
+}
+
+// Update patches visibility and/or status for one tenant shipment.
+// Returns ErrNotFound when the id is unknown or belongs to another tenant
+// (RLS withholds the row → zero rows affected → 404, no enumeration).
+func (r *Repository) Update(ctx context.Context, tenantID, id uuid.UUID, in UpdateInput) (*model.Shipment, error) {
+	var out *model.Shipment
+	err := db.WithTenant(ctx, r.pool, tenantID, func(tx pgx.Tx) error {
+		sets := []string{}
+		args := []any{id}
+		if in.IsPublic != nil {
+			args = append(args, *in.IsPublic)
+			sets = append(sets, fmt.Sprintf("is_public=$%d", len(args)))
+		}
+		if in.Status != nil {
+			args = append(args, *in.Status)
+			sets = append(sets, fmt.Sprintf("status=$%d", len(args)))
+		}
+		s, err := scanShipment(tx.QueryRow(ctx,
+			`UPDATE shipments SET `+strings.Join(sets, ", ")+
+				`, updated_at=now() WHERE id=$1 RETURNING `+shipmentCols,
+			args...))
 		if err != nil {
 			return err
 		}

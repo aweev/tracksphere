@@ -11,14 +11,16 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/tracksphere/tracksphere/internal/db"
+	"github.com/tracksphere/tracksphere/internal/intel"
+	"github.com/tracksphere/tracksphere/internal/notify"
 )
 
-// NotificationSender delivers a message. Production plugs in SES/Twilio here;
-// the default logs and records to the notifications table (feature-flagged
-// providers are a Growth/Enterprise concern — see docs/architecture.md).
+// NotificationSender delivers a message. Kept as a seam for tests; the
+// provider registry in internal/notify selects the real implementation
+// (smtp/twilio/webhook/log) per channel.
 type NotificationSender func(ctx context.Context, channel, recipient, subject, body string) error
 
-// logSender is the built-in sender: it writes to the structured log. The
+// logSender is the test seam: it writes to the structured log. The
 // notifications table is written regardless, giving a full audit trail.
 func logSender(log *slog.Logger) NotificationSender {
 	return func(_ context.Context, channel, recipient, subject, _ string) error {
@@ -29,16 +31,16 @@ func logSender(log *slog.Logger) NotificationSender {
 }
 
 // HandleNotifyShipment sends the customer-facing notification for an event.
+// The provider is chosen per channel from the environment (smtp for email,
+// twilio for sms/whatsapp, else the configured default); the used provider
+// is recorded on the audit row.
 func HandleNotifyShipment(pool *pgxpool.Pool, log *slog.Logger) func(context.Context, []byte) error {
-	return handleNotify(pool, logSender(log))
-}
-
-func handleNotify(pool *pgxpool.Pool, send NotificationSender) func(context.Context, []byte) error {
 	return func(ctx context.Context, body []byte) error {
 		p, err := decodePayload(body)
 		if err != nil {
 			return err
 		}
+		// Fan out to "notify me" subscribers as well as the tenant owner.
 		return db.WithTenant(ctx, pool, p.TenantID, func(tx pgx.Tx) error {
 			// Resolve shipment + its primary contact (tenant owner).
 			var (
@@ -65,21 +67,48 @@ func handleNotify(pool *pgxpool.Pool, send NotificationSender) func(context.Cont
 				"Shipment %s (%s) from %s to %s is now: %s.\nEvent code: %s",
 				track, carrier, origin, dest, status, p.Code)
 
-			channel, recipient := "email", ownerEmail
-			if recipient == "" {
-				channel, recipient = "system", "ops@localhost"
+			recipients := []struct{ channel, to string }{}
+			if ownerEmail != "" {
+				recipients = append(recipients, struct{ channel, to string }{"email", ownerEmail})
 			}
-
-			_, err = tx.Exec(ctx, `
-				INSERT INTO notifications (tenant_id, shipment_id, channel, recipient, subject, body)
-				VALUES ($1,$2,$3,$4,$5,$6)`,
-				p.TenantID, p.ShipmentID, channel, recipient, subject, msgBody)
+			subs, err := tx.Query(ctx, `
+				SELECT channel, recipient FROM tracking_subscriptions
+				WHERE shipment_id=$1`, p.ShipmentID)
 			if err != nil {
 				return err
 			}
-			// Delivery happens inside the tenant tx for auditability; senders
-			// must be idempotent-safe (log sender is).
-			return send(ctx, channel, recipient, subject, msgBody)
+			for subs.Next() {
+				var ch, to string
+				if err := subs.Scan(&ch, &to); err != nil {
+					subs.Close()
+					return err
+				}
+				recipients = append(recipients, struct{ channel, to string }{ch, to})
+			}
+			subs.Close()
+			if err := subs.Err(); err != nil {
+				return err
+			}
+			if len(recipients) == 0 {
+				recipients = append(recipients, struct{ channel, to string }{"system", "ops@localhost"})
+			}
+
+			for _, rc := range recipients {
+				sender := notify.ForChannel(log, rc.channel)
+				_, err = tx.Exec(ctx, `
+					INSERT INTO notifications (tenant_id, shipment_id, channel, recipient, subject, body, provider)
+					VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+					p.TenantID, p.ShipmentID, rc.channel, rc.to, subject, msgBody, sender.Name())
+				if err != nil {
+					return err
+				}
+				// Delivery inside the tenant tx for auditability; providers
+				// must be idempotent-safe (all built-ins are).
+				if err := sender.Send(ctx, rc.channel, rc.to, subject, msgBody); err != nil {
+					return err
+				}
+			}
+			return nil
 		})
 	}
 }
@@ -106,7 +135,8 @@ func EstimateETA(mode string, createdAt time.Time) time.Time {
 }
 
 // HandleRecalculateETA applies a carrier-provided ETA or falls back to the
-// heuristic, then notifies the dashboard.
+// lane-learned estimate (P3): same-lane p50 from your delivered shipments at
+// up to 85% confidence, else the mode baseline. Carrier ETAs always win.
 func HandleRecalculateETA(pool *pgxpool.Pool, log *slog.Logger) func(context.Context, []byte) error {
 	return func(ctx context.Context, body []byte) error {
 		p, err := decodePayload(body)
@@ -115,19 +145,22 @@ func HandleRecalculateETA(pool *pgxpool.Pool, log *slog.Logger) func(context.Con
 		}
 		return db.WithTenant(ctx, pool, p.TenantID, func(tx pgx.Tx) error {
 			var (
-				mode      string
-				createdAt time.Time
-				eta       *time.Time
+				mode, origin, dest, carrier string
+				createdAt                   time.Time
+				eta                         *time.Time
 			)
 			if err := tx.QueryRow(ctx,
-				`SELECT mode, created_at, eta FROM shipments WHERE id=$1`,
-				p.ShipmentID).Scan(&mode, &createdAt, &eta); err != nil {
+				`SELECT mode, origin, destination, carrier, created_at, eta FROM shipments WHERE id=$1`,
+				p.ShipmentID).Scan(&mode, &origin, &dest, &carrier, &createdAt, &eta); err != nil {
 				return err
 			}
 			newETA := eta
 			if newETA == nil {
-				e := EstimateETA(mode, createdAt)
+				e, conf := intel.EstimateETA(mode, createdAt,
+					intel.LaneStatsFor(ctx, tx, origin, dest, carrier, mode))
 				newETA = &e
+				log.Info("eta estimated", "shipment", p.ShipmentID,
+					"confidence", conf, "lane", origin+"→"+dest)
 			}
 			if _, err := tx.Exec(ctx,
 				`UPDATE shipments SET eta=$2, updated_at=now() WHERE id=$1`,

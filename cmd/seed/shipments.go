@@ -16,7 +16,43 @@ type demoEvent struct {
 	code, desc, loc string
 	ago             time.Duration
 	status          string
-	eta             *time.Duration // optional ETA revision (+duration from now)
+	eta             *time.Time
+}
+
+// demoCoords geocodes the demo locations. Real carrier events carry coordinates,
+// so seeded ones should too: without them the fleet map renders "no positions"
+// on first run and the most prominent new feature looks broken on first run.
+var demoCoords = map[string][2]float64{
+	"Shanghai, CN":      {31.2304, 121.4737},
+	"Yangshan Terminal": {30.6167, 122.0667},
+	"Suez Canal":        {30.4458, 32.3486},
+	"Lagos, NG":         {6.5244, 3.3792},
+	"Lagos Island":      {6.4500, 3.3900},
+	"Atlanta, US":       {33.7490, -84.3880},
+	"ATL":               {33.6407, -84.4277},
+	"FRA":               {50.0379, 8.5622},
+	"FRA CargoCity":     {50.0500, 8.5800},
+	"Chicago, US":       {41.8781, -87.6298},
+	"Nairobi, KE":       {-1.2921, 36.8219},
+	"Mombasa, KE":       {-4.0435, 39.6682},
+	"Felixstowe, UK":    {51.9640, 1.3515},
+	"Yokohama, JP":      {35.4437, 139.6380},
+	"Port of Tanjung":   {2.9800, 101.4000},
+	"Karachi, PK":       {24.8607, 67.0011},
+	"Santos, BR":        {-23.9608, -46.3336},
+	"Jebel Ali, AE":     {25.0113, 55.0610},
+	"Hamburg, DE":       {53.5511, 9.9937},
+	"Thessaloniki, GR":  {40.6401, 22.9444},
+	"Buenos Aires, AR":  {-34.6037, -58.3816},
+}
+
+func coords(loc string) (*float64, *float64) {
+	c, ok := demoCoords[loc]
+	if !ok {
+		return nil, nil
+	}
+	lat, lng := c[0], c[1]
+	return &lat, &lng
 }
 
 type demoAlert struct {
@@ -126,8 +162,8 @@ func seedShipments(ctx context.Context, pool *pgxpool.Pool, tenantID uuid.UUID) 
 			if err := tx.QueryRow(ctx, `
 				INSERT INTO shipments
 					(tenant_id, tracking_number, reference, carrier, mode,
-					 origin, destination, status, eta, created_by)
-				VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+					 origin, destination, status, eta, is_public, created_by)
+				VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,true,$10)
 				RETURNING id`,
 				tenantID, ds.tracking, ds.ref, ds.carrier, ds.mode,
 				ds.origin, ds.dest, ds.status, eta, ownerID).
@@ -137,13 +173,14 @@ func seedShipments(ctx context.Context, pool *pgxpool.Pool, tenantID uuid.UUID) 
 
 			for i, ev := range ds.events {
 				occurred := now().Add(-ev.ago)
+				lat, lng := coords(ev.loc)
 				if _, err := tx.Exec(ctx, `
 					INSERT INTO shipment_events
 						(tenant_id, shipment_id, carrier, code, description, location,
-						 occurred_at, source, dedup_key)
-					VALUES ($1,$2,$3,$4,$5,$6,$7,'system',$8)`,
+						 lat, lng, occurred_at, source, dedup_key)
+					VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'system',$10)`,
 					tenantID, shipmentID, ds.carrier, ev.code, ev.desc, ev.loc,
-					occurred, fmt.Sprintf("seed:%s:%d", ds.tracking, i)); err != nil {
+					lat, lng, occurred, fmt.Sprintf("seed:%s:%d", ds.tracking, i)); err != nil {
 					return err
 				}
 			}
