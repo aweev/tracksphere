@@ -33,6 +33,19 @@ func Migrate(ctx context.Context, migrationsURL string) error {
 	}
 	defer conn.Release()
 
+	// The pool's AfterConnect installs statement_timeout='5s' on every
+	// connection. A migration connection must never inherit that. The
+	// advisory-lock wait below blocks while another replica is migrating, and
+	// index builds on a real dataset routinely exceed five seconds; either
+	// would abort the migration with "canceling statement due to statement
+	// timeout", and since cmd/api and cmd/worker os.Exit(1) on a migration
+	// error, every trailing replica would crash-loop on deploy. This once
+	// bit the 000009 GIN trigram builds. The lock_timeout bound stays so a
+	// genuinely stuck lock still fails loudly instead of wedging boot.
+	if _, err := conn.Exec(ctx, `SET statement_timeout = '0'; SET lock_timeout = '30s'`); err != nil {
+		return fmt.Errorf("relax migration timeouts: %w", err)
+	}
+
 	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, migrationLockID); err != nil {
 		return fmt.Errorf("acquire migration lock: %w", err)
 	}
@@ -79,6 +92,12 @@ func Migrate(ctx context.Context, migrationsURL string) error {
 		if err != nil {
 			return fmt.Errorf("read %s: %w", name, err)
 		}
+		if noTransaction(body) {
+			if err := applyUntransacted(ctx, conn, string(body), version); err != nil {
+				return err
+			}
+			continue
+		}
 		tx, err := conn.Begin(ctx)
 		if err != nil {
 			return fmt.Errorf("begin %s: %w", version, err)
@@ -95,6 +114,36 @@ func Migrate(ctx context.Context, migrationsURL string) error {
 		if err := tx.Commit(ctx); err != nil {
 			return fmt.Errorf("commit %s: %w", version, err)
 		}
+	}
+	return nil
+}
+
+// noTransaction reports whether a migration opts out of the per-file
+// transaction. The marker `-- migrate:no-transaction` must be the first line
+// of the file. Such a migration is needed for statements Postgres refuses to
+// run inside a transaction block (CREATE INDEX CONCURRENTLY, partitioning
+// ATTACH of a live table) and for anything that must hold its locks
+// transaction-by-transaction instead of all at once.
+func noTransaction(body []byte) bool {
+	first, _, _ := strings.Cut(string(body), "\n")
+	return strings.TrimSpace(first) == "-- migrate:no-transaction"
+}
+
+// applyUntransacted runs a no-transaction migration directly on the migration
+// connection. Unlike the transactional path there is no rollback: if the body
+// fails, whatever statements already committed stay committed, and the version
+// is not recorded, so the next boot re-runs the whole file. No-transaction
+// migrations MUST therefore be written re-runnable (IF NOT EXISTS everywhere,
+// ADD CONSTRAINT ... NOT VALID + separate VALIDATE, index builds that can be
+// safely repeated) — otherwise a failure leaves a half-applied schema that can
+// never advance.
+func applyUntransacted(ctx context.Context, conn *pgxpool.Conn, body, version string) error {
+	if _, err := conn.Exec(ctx, body); err != nil {
+		return fmt.Errorf("apply %s: %w", version, err)
+	}
+	if _, err := conn.Exec(ctx,
+		`INSERT INTO schema_migrations (version) VALUES ($1)`, version); err != nil {
+		return fmt.Errorf("record %s: %w", version, err)
 	}
 	return nil
 }

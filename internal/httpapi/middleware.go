@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/tracksphere/tracksphere/internal/auth"
+	"github.com/tracksphere/tracksphere/internal/db"
 	"github.com/tracksphere/tracksphere/internal/model"
 )
 
@@ -211,18 +212,37 @@ func trimTracking(s string) string {
 	return strings.TrimSpace(s)
 }
 
-func (s *Server) querySystem(ctx context.Context, sql string, args ...any) pgx.Row {
-	c, err := s.pool.Acquire(ctx)
+// querySystemRow runs a callback inside an explicit transaction that has the
+// app.system bypass raised, for the two bootstrap lookups that cannot be
+// tenant-pinned because the tenant is the thing being resolved (SSO subject ->
+// user, Stripe subscription -> tenant).
+//
+// It replaces a helper with three defects, any one of which was fatal:
+//
+//  1. It acquired a pooled connection and ran set_config(..., true) on it in
+//     autocommit mode. is_local only survives for the current transaction, so
+//     the setting was discarded before the query ran — the bypass was never
+//     active and both callers silently failed to resolve.
+//  2. It released the connection before the caller invoked Scan, and pgx.Row is
+//     lazy: the scan then happened on an arbitrary connection, possibly after
+//     this one had been handed to another request.
+//  3. "Fixing" it by flipping is_local to false would have been strictly worse:
+//     the GUC would persist on a pooled connection and pass the RLS bypass to
+//     whoever borrowed it next.
+//
+// Taking a callback keeps the Scan inside the transaction, which is the only
+// shape that is actually correct here.
+func (s *Server) querySystemRow(ctx context.Context, fn func(tx pgx.Tx) error) error {
+	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return errRow{err}
+		return err
 	}
-	defer c.Release()
-	if _, err := c.Exec(ctx, `SELECT set_config('app.system', 'on', true)`); err != nil {
-		return errRow{err}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	if err := db.SetSystem(ctx, tx); err != nil {
+		return err
 	}
-	return c.QueryRow(ctx, sql, args...)
+	if err := fn(tx); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
-
-type errRow struct{ err error }
-
-func (e errRow) Scan(dest ...any) error { return e.err }

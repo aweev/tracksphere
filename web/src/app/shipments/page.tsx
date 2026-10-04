@@ -34,6 +34,37 @@ function loadViews(): SavedView[] {
   }
 }
 
+/**
+ * Client-side mirror of the server's risk weights, used only to explain a score
+ * in the tooltip. The server remains authoritative for the score itself.
+ *
+ * These weights duplicate internal/readmodel in a second language, which is a
+ * known drift hazard: the Go constants are wDwellMax 35, wStaleMax 25,
+ * wCriticalAlert 15, wAlert 3, wValueMax 15 with value saturating at 10,000.
+ * Phase 1 removes this duplication by having Score() return the breakdown and
+ * persisting it on shipment_current. Until then the arithmetic lives here once
+ * rather than copy-pasted at every call site.
+ */
+function riskBreakdown(s: Shipment): RiskBreakdown {
+  return {
+    dwell:
+      s.dwellHours && s.expectedDwellHours && s.dwellHours > s.expectedDwellHours
+        ? Math.round((s.dwellHours / s.expectedDwellHours - 1) * 35)
+        : 0,
+    stale: s.staleHours && s.expectedDwellHours
+      ? Math.round(Math.max(0, s.staleHours / (s.expectedDwellHours / 6) - 1) * 25)
+      : 0,
+    alerts:
+      (s.openAlerts ?? 0) > 0
+        ? (s.criticalAlerts ?? 0) * 15 + (s.openAlerts ?? 0) * 3
+        : 0,
+    valueAtRisk: s.valueAtRisk ? Math.min((s.valueAtRisk / 10000) * 15, 15) : 0,
+    customerNotified: s.customerNotified ?? false,
+    dwellRatio: s.dwellRatio,
+    staleThreshold: s.expectedDwellHours ? s.expectedDwellHours / 6 : 24,
+  };
+}
+
 export default function ShipmentsPage() {
   return (
     <RequireAuth>
@@ -266,22 +297,7 @@ function ShipmentsBody() {
                     .map((s) => (
                       <tr key={s.id} className="hover:bg-slate-50">
                         <td className="py-3 pr-4">
-                          <RiskTooltip
-                            score={s.riskScore ?? 0}
-                            breakdown={{
-                              dwell: s.dwellHours && s.expectedDwellHours && s.dwellHours > s.expectedDwellHours 
-                                ? Math.round(((s.dwellHours / s.expectedDwellHours) - 1) * 35) 
-                                : 0,
-                              stale: s.staleHours && s.expectedDwellHours 
-                                ? Math.round(Math.max(0, (s.staleHours / (s.expectedDwellHours / 6)) - 1) * 25)
-                                : 0,
-                              alerts: (s.openAlerts ?? 0) > 0 ? (s.criticalAlerts ?? 0) * 15 + (s.openAlerts ?? 0) * 3 : 0,
-                              valueAtRisk: s.valueAtRisk ? Math.min(s.valueAtRisk / 10000 * 15, 15) : 0,
-                              customerNotified: s.customerNotified ?? false,
-                              dwellRatio: s.dwellRatio,
-                              staleThreshold: s.expectedDwellHours ? s.expectedDwellHours / 6 : 24,
-                            }}
-                          >
+                          <RiskTooltip score={s.riskScore ?? 0} breakdown={riskBreakdown(s)}>
                             <RiskBadge
                               tier={s.riskTier as 'critical' | 'at_risk' | 'watch' | 'clear' ?? 'clear'}
                               score={s.riskScore ?? 0}
@@ -347,22 +363,7 @@ function ShipmentsBody() {
                         </Link>
                         {s.reference && <div className="text-xs text-slate-400">{s.reference}</div>}
                       </div>
-                      <RiskTooltip
-                        score={s.riskScore ?? 0}
-                        breakdown={{
-                          dwell: s.dwellHours && s.expectedDwellHours && s.dwellHours > s.expectedDwellHours 
-                            ? Math.round(((s.dwellHours / s.expectedDwellHours) - 1) * 35) 
-                            : 0,
-                          stale: s.staleHours && s.expectedDwellHours 
-                            ? Math.round(Math.max(0, (s.staleHours / (s.expectedDwellHours / 6)) - 1) * 25)
-                            : 0,
-                          alerts: (s.openAlerts ?? 0) > 0 ? (s.criticalAlerts ?? 0) * 15 + (s.openAlerts ?? 0) * 3 : 0,
-                          valueAtRisk: s.valueAtRisk ? Math.min(s.valueAtRisk / 10000 * 15, 15) : 0,
-                          customerNotified: s.customerNotified ?? false,
-                          dwellRatio: s.dwellRatio,
-                          staleThreshold: s.expectedDwellHours ? s.expectedDwellHours / 6 : 24,
-                        }}
-                      >
+<RiskTooltip score={s.riskScore ?? 0} breakdown={riskBreakdown(s)}>
                         <RiskBadge
                           tier={s.riskTier as 'critical' | 'at_risk' | 'watch' | 'clear' ?? 'clear'}
                           score={s.riskScore ?? 0}

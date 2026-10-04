@@ -1,9 +1,8 @@
 'use client';
 
 import { useState, type ReactNode } from 'react';
-import { Card, Empty } from '@/components/ui';
 
-interface RiskBreakdown {
+export interface RiskBreakdown {
   dwell?: number;
   stale?: number;
   alerts?: number;

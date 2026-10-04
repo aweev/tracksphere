@@ -43,6 +43,12 @@ func (s *Server) handlePublicTrack(w http.ResponseWriter, r *http.Request) {
 		"destination":    ship.Destination,
 		"status":         ship.Status,
 		"eta":            ship.ETA,
+		// ETA provenance is a trust feature, and it matters more to the
+		// customer planning around the date than to the operator reading the
+		// same row. Without this the portal could not distinguish a
+		// carrier-confirmed date from our own heuristic, which is exactly the
+		// ambiguity that makes customers stop trusting a tracker.
+		"etaSource":      ship.ETASource,
 		"shippedAt":      ship.ShippedAt,
 		"deliveredAt":    ship.DeliveredAt,
 		"lastUpdate":     ship.UpdatedAt,

@@ -71,9 +71,23 @@ func HandleNotifyShipment(pool *pgxpool.Pool, log *slog.Logger) func(context.Con
 			if ownerEmail != "" {
 				recipients = append(recipients, struct{ channel, to string }{"email", ownerEmail})
 			}
+			// Only confirmed, non-digest subscribers may be pushed to.
+			//
+			// Without the status filter this query returned pending and revoked
+			// rows too, so an anonymous caller who POSTed a phone number to the
+			// public subscribe endpoint — and never confirmed it — received an
+			// SMS on every subsequent carrier event. That is the exact
+			// unsolicited-messaging hole the double opt-in in migration
+			// 000016 exists to close, and it bypassed the consent ledger
+			// entirely: nothing here checked notification_consent.
+			//
+			// digest_only is excluded too: it is the subscriber's explicit
+			// request to be batched rather than pushed.
 			subs, err := tx.Query(ctx, `
 				SELECT channel, recipient FROM tracking_subscriptions
-				WHERE shipment_id=$1`, p.ShipmentID)
+				WHERE shipment_id=$1
+				  AND status='active'
+				  AND NOT digest_only`, p.ShipmentID)
 			if err != nil {
 				return err
 			}

@@ -61,9 +61,15 @@ type Client struct {
 	cb *circuitbreaker.CircuitBreaker
 }
 
-// NewClient creates a new HTTP client with circuit breaker
+// NewClient creates a new HTTP client with circuit breaker.
+//
+// Every client built here is hardened against SSRF: the transport refuses to
+// dial non-public addresses and revalidates each redirect hop. All of these
+// clients are used to fetch tenant-supplied URLs (carrier base URLs, outbound
+// webhook endpoints), so without the guard any tenant admin could aim the
+// server at the cloud metadata service, the database, or an internal panel.
 func NewClient(config ClientConfig) *Client {
-	transport := &http.Transport{
+	transport := hardenTransport(&http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
 		MaxIdleConns:          config.MaxIdleConns,
 		MaxConnsPerHost:       config.MaxConnsPerHost,
@@ -73,11 +79,12 @@ func NewClient(config ClientConfig) *Client {
 		TLSClientConfig: &tls.Config{
 			MinVersion: tls.VersionTLS12,
 		},
-	}
+	})
 
 	client := &http.Client{
-		Transport: transport,
-		Timeout:   config.Timeout,
+		Transport:     transport,
+		Timeout:       config.Timeout,
+		CheckRedirect: safeCheckRedirect,
 	}
 
 	var cb *circuitbreaker.CircuitBreaker

@@ -102,10 +102,19 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &req) {
 		return
 	}
+	// The password flow returns the challenge in the response body; the SSO
+	// flow cannot (it is a browser redirect), so it delivers it in an HttpOnly
+	// cookie scoped to this endpoint. Accept either, never both.
+	if req.Challenge == "" {
+		if c, cerr := r.Cookie(MFAChallengeCookie); cerr == nil {
+			req.Challenge = c.Value
+		}
+	}
 	if req.Challenge == "" || req.Code == "" {
 		writeError(w, http.StatusBadRequest, "invalid_input", "challenge and code are required")
 		return
 	}
+	s.clearMFAChallengeCookie(w)
 
 	hash := auth.HashToken(req.Challenge)
 	var (

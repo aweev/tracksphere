@@ -16,6 +16,13 @@ interface AuthState {
   loading: boolean;
   /** MFA challenge flow: set when login returns mfaRequired. */
   challenge: string | null;
+  /**
+   * MFA challenge delivered out-of-band after an SSO redirect. The challenge
+   * token is in an HttpOnly cookie, so script never sees it and there is
+   * nothing to hold here — only the fact that a challenge is pending.
+   */
+  ssoChallenge: boolean;
+  startSsoChallenge: () => void;
   login: (email: string, password: string) => Promise<'ok' | 'mfa'>;
   verifyMfa: (code: string) => Promise<void>;
   register: (orgName: string, name: string, email: string, password: string) => Promise<void>;
@@ -30,6 +37,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [tenant, setTenant] = useState<Tenant | null>(null);
   const [loading, setLoading] = useState(true);
   const [challenge, setChallenge] = useState<string | null>(null);
+  const [ssoChallenge, setSsoChallenge] = useState(false);
 
   // Restore session on boot (cookie-based).
   useEffect(() => {
@@ -55,12 +63,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const verifyMfa = useCallback(
     async (code: string) => {
-      if (!challenge) throw new Error('No MFA challenge in progress');
-      const { data } = await authApi.mfaVerify(challenge, code);
+      if (!challenge && !ssoChallenge) throw new Error('No MFA challenge in progress');
+      // An empty challenge tells the server to read the HttpOnly cookie.
+      const { data } = await authApi.mfaVerify(challenge ?? '', code);
       setUser(data.user);
       setChallenge(null);
+      setSsoChallenge(false);
     },
-    [challenge],
+    [challenge, ssoChallenge],
   );
 
   const register = useCallback(
@@ -86,11 +96,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         tenant,
         loading,
         challenge,
+        ssoChallenge,
+        startSsoChallenge: () => setSsoChallenge(true),
         login,
         verifyMfa,
         register,
         logout,
-        clearChallenge: () => setChallenge(null),
+        clearChallenge: () => {
+          setChallenge(null);
+          setSsoChallenge(false);
+        },
       }}
     >
       {children}

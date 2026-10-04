@@ -12,6 +12,7 @@ import (
 	"github.com/tracksphere/tracksphere/internal/auth"
 	"github.com/tracksphere/tracksphere/internal/carriers"
 	"github.com/tracksphere/tracksphere/internal/db"
+	"github.com/tracksphere/tracksphere/internal/httpclient"
 	"github.com/tracksphere/tracksphere/internal/queue"
 )
 
@@ -101,6 +102,21 @@ func (s *Server) handleUpsertCarrier(w http.ResponseWriter, r *http.Request) {
 	if req.Active != nil {
 		active = *req.Active
 	}
+
+	// base_url is fetched by the worker with the tenant's sealed credentials
+	// attached as a bearer token. It was previously stored with only a
+	// TrimSpace, so any tenant admin could point the poller at the cloud
+	// metadata service, the database, or an internal admin panel and have the
+	// server request it on a schedule — a full SSRF proxy that also leaked the
+	// carrier credential to the attacker's host.
+	baseURL := strings.TrimSpace(req.BaseURL)
+	if baseURL != "" {
+		if err := httpclient.ValidateOutboundURL(baseURL); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_base_url", err.Error())
+			return
+		}
+	}
+
 	var id uuid.UUID
 	err := db.WithTenant(r.Context(), s.pool, user.TenantID, func(tx pgx.Tx) error {
 		return tx.QueryRow(r.Context(), `
@@ -114,7 +130,7 @@ func (s *Server) handleUpsertCarrier(w http.ResponseWriter, r *http.Request) {
 				active=EXCLUDED.active,
 				last_error=NULL
 			RETURNING id`,
-			user.TenantID, carrier, strings.TrimSpace(req.BaseURL), sealed, pollMinutes, active, user.ID).Scan(&id)
+			user.TenantID, carrier, baseURL, sealed, pollMinutes, active, user.ID).Scan(&id)
 	})
 	if err != nil {
 		s.domainError(w, err)

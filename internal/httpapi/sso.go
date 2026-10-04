@@ -109,13 +109,15 @@ func (s *Server) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 	// (provider, subject). The alternative, joining users inside a pinned
 	// transaction, is impossible because the tenant is the thing being resolved.
 	var user model.User
-	err = s.querySystem(r.Context(), `
+	err = s.querySystemRow(r.Context(), func(tx pgx.Tx) error {
+		return tx.QueryRow(r.Context(), `
 		SELECT u.id, u.tenant_id, u.email, u.name, u.role, u.totp_enabled, u.created_at
 		FROM sso_accounts a JOIN users u ON u.id = a.user_id
 		WHERE a.provider=$1 AND a.subject=$2 AND u.is_active=true`,
-		id.Provider, id.Subject).Scan(
-		&user.ID, &user.TenantID, &user.Email, &user.Name,
-		&user.Role, &user.TOTPEnabled, &user.CreatedAt)
+			id.Provider, id.Subject).Scan(
+			&user.ID, &user.TenantID, &user.Email, &user.Name,
+			&user.Role, &user.TOTPEnabled, &user.CreatedAt)
+	})
 	if err == nil {
 		s.finishSSOLogin(w, r, user, id)
 		return
@@ -232,6 +234,12 @@ func (s *Server) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 }
 
 // finishSSOLogin mints a session for a linked user and lands on the app.
+//
+// MFA is enforced here exactly as it is on the password path. It previously
+// issued a full session with mfaPending hardcoded to false, so for any tenant
+// using SSO the second factor was decorative: a phished IdP password was a
+// complete account compromise despite MFA being switched on and advertised as
+// a control.
 func (s *Server) finishSSOLogin(w http.ResponseWriter, r *http.Request, user model.User, id *sso.Identity) {
 	tx, err := s.pool.Begin(r.Context())
 	if err != nil {
@@ -239,7 +247,9 @@ func (s *Server) finishSSOLogin(w http.ResponseWriter, r *http.Request, user mod
 		return
 	}
 	defer func() { _ = tx.Rollback(r.Context()) }()
-	token, err := s.issueSession(r.Context(), tx, user, user.TenantID, false, r)
+
+	mfaPending := user.TOTPEnabled
+	token, err := s.issueSession(r.Context(), tx, user, user.TenantID, mfaPending, r)
 	if err != nil {
 		s.domainError(w, err)
 		return
@@ -249,7 +259,16 @@ func (s *Server) finishSSOLogin(w http.ResponseWriter, r *http.Request, user mod
 		return
 	}
 	s.auditEvent(r.Context(), &user.TenantID, &user.ID, user.Email, "login", r)
-	_ = id
+
+	if mfaPending {
+		// No session cookie yet — only the challenge, and only to the verify
+		// endpoint.
+		s.setMFAChallengeCookie(w, token)
+		s.auditEvent(r.Context(), &user.TenantID, &user.ID, user.Email, "mfa_challenge", r)
+		http.Redirect(w, r, "/login?mfa=1", http.StatusFound)
+		return
+	}
+
 	s.setSessionCookie(w, token)
 	http.Redirect(w, r, "/", http.StatusFound)
 }

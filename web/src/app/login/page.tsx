@@ -7,7 +7,8 @@ import { useAuth } from '@/lib/auth';
 import { RequestError } from '@/lib/api';
 
 export default function LoginPage() {
-  const { login, verifyMfa, challenge, clearChallenge } = useAuth();
+  const { login, verifyMfa, challenge, ssoChallenge, startSsoChallenge, clearChallenge } =
+    useAuth();
   const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -15,6 +16,16 @@ export default function LoginPage() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [sso, setSso] = useState<{ google: boolean; microsoft: boolean } | null>(null);
+
+  // Landed here from the SSO callback: the IdP accepted the user but the
+  // account has MFA, so the API issued a challenge into an HttpOnly cookie and
+  // redirected here instead of minting a session. Show the code prompt without
+  // ever holding the challenge token in script.
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('mfa') === '1') {
+      startSsoChallenge();
+    }
+  }, [startSsoChallenge]);
 
   useEffect(() => {
     fetch('/api/v1/auth/sso/status')
@@ -66,7 +77,7 @@ export default function LoginPage() {
           <p className="mt-1 text-sm text-slate-500">Sign in to the control tower</p>
         </div>
 
-        {challenge ? (
+        {(challenge || ssoChallenge) ? (
           <form onSubmit={onMfa} className="space-y-4">
             <p className="rounded-xl bg-amber-50 p-3 text-sm text-amber-800">
               Two-factor verification required. Enter the 6-digit code from your authenticator app.

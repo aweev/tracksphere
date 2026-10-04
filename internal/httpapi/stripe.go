@@ -138,9 +138,11 @@ func (s *Server) applyStripePlan(ctx context.Context, tenantIDStr, cust, sub, pl
 // System read: there is no tenant context in a Stripe webhook.
 func (s *Server) tenantForStripeSub(ctx context.Context, sub string) (string, bool) {
 	var tenantID string
-	err := s.querySystem(ctx,
-		`SELECT tenant_id::text FROM stripe_subscriptions WHERE stripe_sub=$1`,
-		sub).Scan(&tenantID)
+	err := s.querySystemRow(ctx, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`SELECT tenant_id::text FROM stripe_subscriptions WHERE stripe_sub=$1`,
+			sub).Scan(&tenantID)
+	})
 	return tenantID, err == nil
 }
 

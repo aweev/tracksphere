@@ -286,6 +286,8 @@ export interface PublicTracking {
   destination: string
   status: ShipmentStatus
   eta?: string
+  /** none | carrier | estimated | lane_model — provenance of `eta`. */
+  etaSource?: string
   shippedAt?: string
   deliveredAt?: string
   lastUpdate: string
@@ -352,7 +354,12 @@ export const authApi = {
   mfaVerify: (challenge: string, code: string) =>
     request<{ user: User }>('/api/v1/auth/mfa/verify', {
       method: 'POST',
-      body: JSON.stringify({ challenge, code }),
+      // The password flow hands the challenge to us in the login response. The
+      // SSO flow cannot: it is a browser redirect, so the challenge travels in
+      // an HttpOnly cookie scoped to this endpoint and there is nothing to send
+      // from here. Omitting the field (rather than sending "") keeps the server
+      // on its cookie path.
+      body: JSON.stringify(challenge ? { challenge, code } : { code }),
     }),
   register: (orgName: string, name: string, email: string, password: string) =>
     request<{ user: User; tenant: Tenant }>('/api/v1/auth/register', {

@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/tracksphere/tracksphere/internal/db"
+	"github.com/tracksphere/tracksphere/internal/httpclient"
 )
 
 // Outbound webhooks: tenant endpoints receiving shipment.updated /
@@ -46,8 +47,12 @@ func (s *Server) handleCreateWebhookEndpoint(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	url := strings.TrimSpace(req.URL)
-	if !strings.HasPrefix(url, "https://") {
-		writeError(w, http.StatusBadRequest, "invalid_input", "url must be https://")
+	// The old check was a bare https:// prefix test, which still permitted
+	// https://169.254.169.254/, https://localhost:6379/ and any 302 to an
+	// internal address. ValidateOutboundURL rejects those at write time, and
+	// the shared transport re-checks at dial time.
+	if err := httpclient.ValidateOutboundURL(url); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_url", err.Error())
 		return
 	}
 	events := []string{"shipment.updated", "alert.changed"}

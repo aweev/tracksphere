@@ -71,7 +71,7 @@ export function Timeline({
               </span>
               <time
                 className="font-mono text-xs text-slate-600"
-                dateTime={e.occurredAt.toISOString()}
+                dateTime={new Date(e.occurredAt).toISOString()}
                 title={new Date(e.occurredAt).toLocaleString()}
               >
                 {relativeTime(e.occurredAt)}

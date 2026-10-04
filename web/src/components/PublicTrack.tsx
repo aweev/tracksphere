@@ -3,7 +3,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState, type FormEvent } from 'react';
 import Link from 'next/link';
-import { Card, Empty, StatusPill, RiskBadge } from '@/components/ui';
+import { Card, Empty, StatusPill } from '@/components/ui';
 import { Timeline } from '@/components/Timeline';
 import { api, RequestError, type PublicTracking } from '@/lib/api';
 
