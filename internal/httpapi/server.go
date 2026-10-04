@@ -64,6 +64,7 @@ func (s *Server) Router() http.Handler {
 	r.Use(middleware.Timeout(30 * time.Second))
 	r.Use(s.cors)
 	r.Use(s.cspNonceMiddleware)
+	r.Use(s.versioningMiddleware)
 	// Compression buffers, which turns live SSE events into a trickle. It is
 	// applied everywhere except the event stream, where latency is the feature.
 	r.Use(compressExceptSSE(5))

@@ -96,6 +96,26 @@ func (s *Server) buildCSP(nonce string) string {
 	return strings.Join(directives, "; ")
 }
 
+// versioningMiddleware adds API version headers and handles deprecation
+func (s *Server) versioningMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Set API version headers
+		w.Header().Set("X-API-Version", "v1")
+		w.Header().Set("X-API-Deprecated", "false")
+		
+		// Check for deprecated version in Accept-Version header
+		acceptVersion := r.Header.Get("Accept-Version")
+		if acceptVersion != "" && acceptVersion != "v1" {
+			w.Header().Set("X-API-Deprecated", "true")
+			w.Header().Set("Deprecation", "true")
+			w.Header().Set("Sunset", "Sat, 01 Jan 2027 00:00:00 GMT")
+			w.Header().Set("Link", "<https://api.tracksphere.io/api/v1>; rel=\"successor-version\"")
+		}
+		
+		next.ServeHTTP(w, r)
+	})
+}
+
 func (s *Server) requireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if u := s.apiKeyUser(r); u != nil {
