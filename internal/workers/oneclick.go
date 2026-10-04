@@ -20,6 +20,20 @@ const (
 	EmailCarrierJob   = "shipment.email_carrier"
 )
 
+// getTenantBranding fetches the tenant's branding configuration
+func getTenantBranding(ctx context.Context, q *queue.Queue, tenantID uuid.UUID) notify.BrandConfig {
+	var brand notify.BrandConfig
+	err := q.Pool().QueryRow(ctx, `
+		SELECT company_name, primary_color, logo_url, support_email, custom_domain
+		FROM tenant_branding WHERE tenant_id=$1`, tenantID).
+		Scan(&brand.CompanyName, &brand.PrimaryColor, &brand.LogoURL, &brand.SupportEmail, &brand.CustomDomain)
+	if err != nil {
+		// Return defaults
+		brand.PrimaryColor = "#ff6b00"
+	}
+	return brand
+}
+
 // HandleNotifyCustomer sends a custom customer notification for a shipment.
 func HandleNotifyCustomer(q *queue.Queue, log *slog.Logger) func(context.Context, []byte) error {
 	return func(ctx context.Context, body []byte) error {
@@ -46,6 +60,10 @@ func HandleNotifyCustomer(q *queue.Queue, log *slog.Logger) func(context.Context
 			log.Warn("notify_customer: shipment not found", "shipment", p.ShipmentID, "err", err)
 			return nil
 		}
+
+		// Get tenant branding for template rendering
+		brand := getTenantBranding(ctx, q, p.TenantID)
+		templateEngine := notify.NewTemplateEngine(brand)
 
 		// Get active subscriptions for this shipment
 		rows, err := q.Pool().Query(ctx, `
@@ -92,7 +110,21 @@ func HandleNotifyCustomer(q *queue.Queue, log *slog.Logger) func(context.Context
 					}(),
 				)
 			}
-			if err := sender.Send(ctx, sub.Channel, sub.Recipient, subject, body); err != nil {
+			
+			// Render branded message based on channel
+			var renderedBody string
+			switch sub.Channel {
+			case "email":
+				renderedBody = templateEngine.RenderEmail(subject, body, trackingNumber, carrier, mode, origin, destination, status, eta)
+			case "sms":
+				renderedBody = templateEngine.RenderSMS(subject, body, trackingNumber, carrier, status)
+			case "whatsapp":
+				renderedBody = templateEngine.RenderWhatsApp(subject, body, trackingNumber, carrier, origin, destination, status, eta)
+			default:
+				renderedBody = body
+			}
+			
+			if err := sender.Send(ctx, sub.Channel, sub.Recipient, subject, renderedBody); err != nil {
 				log.Warn("notify_customer: send failed", "channel", sub.Channel, "err", err)
 				continue
 			}
@@ -101,7 +133,7 @@ func HandleNotifyCustomer(q *queue.Queue, log *slog.Logger) func(context.Context
 				_, e := tx.Exec(ctx, `
 					INSERT INTO notifications (tenant_id, channel, recipient, subject, body, provider)
 					VALUES ($1,$2,$3,$4,$5,$6)`,
-					p.TenantID, sub.Channel, sub.Recipient, subject, body, sender.Name())
+					p.TenantID, sub.Channel, sub.Recipient, subject, renderedBody, sender.Name())
 				return e
 			}); err != nil {
 				log.Warn("notify_customer: record failed", "err", err)
@@ -160,17 +192,22 @@ func HandleEmailCarrier(q *queue.Queue, log *slog.Logger) func(context.Context, 
 
 		sender := notify.Default(log)
 
+		// Get tenant branding for template rendering
+		brand := getTenantBranding(ctx, q, p.TenantID)
+		templateEngine := notify.NewTemplateEngine(brand)
+
 		subject := fmt.Sprintf("TrackSphere: %s - %s (%s)", p.Title, trackingNumber, carrier)
-		emailBody := fmt.Sprintf(
-			"Dear %s,\n\n"+
+		emailBody := templateEngine.RenderEmail(
+			p.Title,
+			fmt.Sprintf(
 				"TrackSphere exception notification for shipment %s:\n\n"+
-				"Tracking: %s\nCarrier: %s\nMode: %s\nRoute: %s → %s\nStatus: %s\n\n"+
-				"Exception: %s\n%s\n\n"+
-				"Operator note: %s\n\n"+
-				"Please investigate and respond via TrackSphere or email.\n\n"+
-				"TrackSphere\nhttps://track.tracksphere.io/shipments/%s",
-			carrier, p.Title, trackingNumber, carrier, mode, origin, destination, status,
-			p.Title, p.Message, p.Note, p.ShipmentID,
+					"Tracking: %s\nCarrier: %s\nMode: %s\nRoute: %s → %s\nStatus: %s\n\n"+
+					"Exception: %s\n%s\n\n"+
+					"Operator note: %s\n\n",
+				p.Title, trackingNumber, carrier, mode, origin, destination, status,
+				p.Title, p.Message, p.Note,
+			),
+			trackingNumber, carrier, mode, origin, destination, status, nil,
 		)
 
 		if err := sender.Send(ctx, "email", carrierEmail, subject, emailBody); err != nil {
