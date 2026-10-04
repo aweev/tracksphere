@@ -1,0 +1,35 @@
+# Normalise every text file to LF in the repository and check it out as LF on
+# all platforms. Without this, a Windows clone with core.autocrlf=true rewrites
+# line endings in the working tree, which shows up as whole-file diffs and can
+# silently break the Docker builds and shell scripts below.
+* text=auto eol=lf
+
+# PowerShell is Windows-native — CRLF is correct and expected here.
+*.ps1 text eol=crlf
+
+# Inputs where a stray CR is a real bug, not just diff noise: a CRLF in a
+# Dockerfile continuation line or a shell shebang breaks the build at runtime,
+# and CRLF in a SQL migration changes nothing but confuses psql error output.
+Dockerfile* text eol=lf
+*.sh text eol=lf
+*.sql text eol=lf
+*.go text eol=lf
+*.ts text eol=lf
+*.tsx text eol=lf
+*.css text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+
+# Binary assets must never be line-ending normalised or Git will corrupt them.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.eot binary

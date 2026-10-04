@@ -31,3 +31,24 @@ deploy/.env
 # Test artifacts
 coverage.out
 coverage.html
+
+# ── curl / manual e2e scratch ────────────────────────────────────────────
+# Eleven of these were committed on 2026-10-02 and contained live
+# Set-Cookie: tracksphere_session values plus plaintext passwords. They were
+# removed from the working tree but the root commit was never rewritten, so
+# they stayed fetchable on the public remote. .gitignore does not protect
+# already-committed files — see AUDIT-2026-10-04.md section 0.1.
+*-headers.txt
+*-cookies.txt
+curl-*.txt
+# Root-anchored: these names are too generic to ignore repo-wide without
+# risking a legitimate future file.
+c[0-9].txt
+/a.json
+/b.json
+/r.json
+/login.json
+/reg.json
+/reg-headers.txt
+/lh.txt
+/rh.txt

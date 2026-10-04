@@ -1,0 +1,65 @@
+# Docker build context exclusions.
+#
+# This file did not exist until 2026-10-04. Because both Dockerfiles build from
+# the repository root, the daemon was receiving the entire tree — including
+# web/node_modules, the local .env with real secrets, and .git. Dockerfile.web
+# then ran `COPY web/ ./`, which on a Windows host overwrote the Linux
+# node_modules with Windows binaries. Keep this file in sync with what the
+# Dockerfiles actually COPY:
+#
+#   Dockerfile.api needs : go.mod, go.sum, cmd/, internal/
+#   Dockerfile.web needs : web/package.json, web/package-lock.json, web/
+
+# ── VCS, CI and editor state ───────────────────────────────────────────
+.git
+.gitignore
+.gitattributes
+.github
+.vscode
+.idea
+.DS_Store
+.kilo
+
+# ── Secrets: never hand these to the daemon ────────────────────────────
+# Without this the build context (and therefore any image layer or build log
+# that echoes it) contains the operator's live credentials.
+.env
+.env.local
+.env.*.local
+*.pem
+*.pfx
+*.p12
+*.key
+id_rsa*
+# .env.example and deploy/.env.example are templates, not secrets, but no
+# Dockerfile COPYs them either; they are kept out to keep the context small.
+
+# ── Build artifacts ────────────────────────────────────────────────────
+# The critical one: Dockerfile.web does `COPY web/ ./`, so without this a
+# developer's host node_modules (possibly Windows binaries) lands on top of
+# the npm ci output from the deps stage.
+**/node_modules
+**/.next
+**/out
+**/*.tsbuildinfo
+bin/
+dist/
+
+# ── Logs and scratch output ────────────────────────────────────────────
+logs/
+*.log
+**/*.log
+scratch/
+
+# ── Runtime data (uploaded documents, local var tree) ──────────────────
+var/
+
+# ── Not needed to build ────────────────────────────────────────────────
+# None of the Dockerfiles COPY any of these; excluding them keeps the context
+# small and keeps documentation and runbooks out of the image.
+docs/
+deploy/
+scripts/
+*.md
+AUDIT*.md
+Makefile
