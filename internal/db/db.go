@@ -207,6 +207,66 @@ func ClearSystem(ctx context.Context, q querier) error {
 	return nil
 }
 
+// VerifyTenantCascade reports any tenant-scoped table still holding rows for
+// tenantID. The table list is derived from the catalogue (every table in
+// public with a tenant_id column), so a future migration that adds a tenant
+// table cannot be silently forgotten the way the dropped 000018 function was:
+// it hardcoded an array that named a table which does not exist, and raised
+// on its first iteration.
+//
+// The caller must already hold a transaction with both app.system and
+// app.tenant_id set. app.system admits the tenants-table read; app.tenant_id
+// admits the child tables, because app.system is not a universal bypass —
+// eight tenant tables have policies with no app.system branch at all, and a
+// check relying on it alone would read zero rows from exactly those tables and
+// pass falsely.
+func VerifyTenantCascade(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID) ([]string, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT c.relname
+		FROM pg_class c
+		JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE n.nspname = 'public'
+		  AND c.relkind = 'r'
+		  AND EXISTS (
+			SELECT 1 FROM pg_attribute a
+			WHERE a.attrelid = c.oid AND a.attname = 'tenant_id'
+			  AND NOT a.attisdropped AND a.attnum > 0
+		  )
+		ORDER BY c.relname`)
+	if err != nil {
+		return nil, fmt.Errorf("list tenant tables: %w", err)
+	}
+	var tables []string
+	for rows.Next() {
+		var t string
+		if err := rows.Scan(&t); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("read tenant tables: %w", err)
+		}
+		tables = append(tables, t)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read tenant tables: %w", err)
+	}
+
+	var remaining []string
+	for _, t := range tables {
+		// Identifiers cannot be parameterised; t comes from pg_class, and
+		// Sanitize quotes it regardless.
+		q := fmt.Sprintf(`SELECT count(*) FROM %s WHERE tenant_id = $1`,
+			pgx.Identifier{t}.Sanitize())
+		var n int64
+		if err := tx.QueryRow(ctx, q, tenantID).Scan(&n); err != nil {
+			return nil, fmt.Errorf("count %s: %w", t, err)
+		}
+		if n > 0 {
+			remaining = append(remaining, fmt.Sprintf("%s=%d", t, n))
+		}
+	}
+	return remaining, nil
+}
+
 // calculateRecommendedPoolSize returns the recommended max connections based on
 // the application's concurrency requirements.
 // Formula: (API workers + worker pollers + background tasks) × safety factor

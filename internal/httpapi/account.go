@@ -1,9 +1,7 @@
 package httpapi
 
 import (
-	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"time"
 
@@ -204,7 +202,7 @@ func (s *Server) handleEraseAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	remaining, err := verifyTenantCascade(r.Context(), tx, user.TenantID)
+	remaining, err := db.VerifyTenantCascade(r.Context(), tx, user.TenantID)
 	if err != nil {
 		s.log.Error("erase cascade verification failed", "tenant", user.TenantID, "err", err)
 		writeError(w, http.StatusInternalServerError, "erase_verify_failed",
@@ -229,55 +227,4 @@ func (s *Server) handleEraseAccount(w http.ResponseWriter, r *http.Request) {
 		SameSite: http.SameSiteLaxMode,
 	})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-}
-
-// verifyTenantCascade reports any tenant-scoped table still holding rows for
-// tenantID. The table list comes from the catalogue (any table in public with
-// a tenant_id column) so a future migration that adds a tenant table cannot be
-// silently forgotten, which is precisely how the dropped 000018 function broke.
-func verifyTenantCascade(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID) ([]string, error) {
-	rows, err := tx.Query(ctx, `
-		SELECT c.relname
-		FROM pg_class c
-		JOIN pg_namespace n ON n.oid = c.relnamespace
-		WHERE n.nspname = 'public'
-		  AND c.relkind = 'r'
-		  AND EXISTS (
-			SELECT 1 FROM pg_attribute a
-			WHERE a.attrelid = c.oid AND a.attname = 'tenant_id'
-			  AND NOT a.attisdropped AND a.attnum > 0
-		  )
-		ORDER BY c.relname`)
-	if err != nil {
-		return nil, err
-	}
-	var tables []string
-	for rows.Next() {
-		var t string
-		if err := rows.Scan(&t); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		tables = append(tables, t)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	var remaining []string
-	for _, t := range tables {
-		// Identifiers cannot be parameterised; t comes from pg_class, and
-		// Sanitize quotes it anyway.
-		q := fmt.Sprintf(`SELECT count(*) FROM %s WHERE tenant_id = $1`,
-			pgx.Identifier{t}.Sanitize())
-		var n int64
-		if err := tx.QueryRow(ctx, q, tenantID).Scan(&n); err != nil {
-			return nil, fmt.Errorf("count %s: %w", t, err)
-		}
-		if n > 0 {
-			remaining = append(remaining, fmt.Sprintf("%s=%d", t, n))
-		}
-	}
-	return remaining, nil
 }
