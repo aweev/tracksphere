@@ -382,15 +382,26 @@ func etaProvenance(eta, lastEvent, created *time.Time, mode string) (string, flo
 	return "carrier", 0.95
 }
 
-// RefreshBatch recomputes up to limit stale rows. Called by the sweep so the
+// RefreshBatch recomputes up to limit dirty rows. Called by the sweep so the
 // read model self-heals even if an incremental update was missed.
+//
+// Work is driven by shipments.needs_refresh, which writers set and Refresh
+// clears — not by a time window. The previous predicate (updated_at older
+// than 15 minutes, evaluated hourly) qualified every row on every pass, which
+// made this a full recompute truncated at `limit` rather than an incremental
+// delta. The ORDER BY carries a stable s.id tiebreaker so batch membership
+// does not churn between passes; without it, rows at the cutoff flicker in
+// and out of the window, which is one of the feeds for alert flapping.
+//
+// Returns the number actually refreshed, not merely attempted: a pass in which
+// every Refresh fails must not report success.
 func RefreshBatch(ctx context.Context, tx pgx.Tx, limit int) (int, error) {
 	rows, err := tx.Query(ctx, `
 		SELECT s.id FROM shipments s
 		LEFT JOIN shipment_current c ON c.shipment_id = s.id
-		WHERE c.shipment_id IS NULL
-		   OR c.updated_at < now() - interval '15 minutes'
-		ORDER BY c.updated_at NULLS FIRST
+		WHERE s.needs_refresh
+		   OR c.shipment_id IS NULL
+		ORDER BY c.updated_at NULLS FIRST, s.id
 		LIMIT $1`, limit)
 	if err != nil {
 		return 0, err
@@ -408,11 +419,14 @@ func RefreshBatch(ctx context.Context, tx pgx.Tx, limit int) (int, error) {
 	if err := rows.Err(); err != nil {
 		return 0, err
 	}
+	refreshed := 0
 	for _, id := range ids {
 		if err := Refresh(ctx, tx, id); err != nil {
-			// One bad row must not stall the sweep.
+			// One bad row must not stall the sweep. Its flag stays set, so
+			// the next pass retries it instead of silently skipping it.
 			continue
 		}
+		refreshed++
 	}
-	return len(ids), nil
+	return refreshed, nil
 }

@@ -36,6 +36,100 @@ func refreshPool(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
+// TestRefreshBatchIsFlagDriven proves the batch processes a bounded queue,
+// not a time window. After a successful refresh the flag clears, so a second
+// batch must find nothing — under the old 15-minute predicate against an
+// hourly sweep, every row qualified on every pass and this assertion failed.
+func TestRefreshBatchIsFlagDriven(t *testing.T) {
+	pool := refreshPool(t)
+	ctx := context.Background()
+
+	tenantID := uuid.New()
+	slug := "fb-" + tenantID.String()[:8]
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := db.SetSystem(ctx, tx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO tenants (id, name, slug) VALUES ($1, $2, $3)`,
+		tenantID, "Flag Probe", slug); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		cctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		tx, err := pool.Begin(cctx)
+		if err != nil {
+			return
+		}
+		defer func() { _ = tx.Rollback(cctx) }()
+		_ = db.SetSystem(cctx, tx)
+		_ = db.SetTenant(cctx, tx, tenantID)
+		_, _ = tx.Exec(cctx, `DELETE FROM tenants WHERE id=$1`, tenantID)
+		_ = tx.Commit(cctx)
+	})
+
+	var shipmentID uuid.UUID
+	if err := db.WithTenant(ctx, pool, tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `
+			INSERT INTO shipments (tenant_id, tracking_number, carrier, mode)
+			VALUES ($1, $2, 'probe-carrier', 'road') RETURNING id`,
+			tenantID, "FB-"+tenantID.String()[:8]).Scan(&shipmentID)
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// First batch must pick up the new (dirty-by-default) row.
+	var first int
+	if err := db.WithTenant(ctx, pool, tenantID, func(tx pgx.Tx) error {
+		var err error
+		first, err = RefreshBatch(ctx, tx, 100)
+		return err
+	}); err != nil {
+		t.Fatalf("first batch: %v", err)
+	}
+	if first != 1 {
+		t.Fatalf("first batch refreshed %d, want 1", first)
+	}
+
+	// Second batch must find nothing: the flag cleared on success.
+	var second int
+	if err := db.WithTenant(ctx, pool, tenantID, func(tx pgx.Tx) error {
+		var err error
+		second, err = RefreshBatch(ctx, tx, 100)
+		return err
+	}); err != nil {
+		t.Fatalf("second batch: %v", err)
+	}
+	if second != 0 {
+		t.Fatalf("second batch refreshed %d, want 0 (nothing dirty)", second)
+	}
+
+	// Re-dirty the row; the next batch must pick exactly it up again.
+	if err := db.WithTenant(ctx, pool, tenantID, func(tx pgx.Tx) error {
+		return db.MarkShipmentDirty(ctx, tx, shipmentID)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var third int
+	if err := db.WithTenant(ctx, pool, tenantID, func(tx pgx.Tx) error {
+		var err error
+		third, err = RefreshBatch(ctx, tx, 100)
+		return err
+	}); err != nil {
+		t.Fatalf("third batch: %v", err)
+	}
+	if third != 1 {
+		t.Fatalf("third batch refreshed %d, want 1 (re-dirtied row)", third)
+	}
+}
 // TestRefreshPersistsBreakdown seeds a shipment with a declared value, runs
 // Refresh, and requires the persisted breakdown to carry that value with
 // valueKnown=true — and the dirty flag to be cleared. Before the breakdown
