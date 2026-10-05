@@ -76,7 +76,7 @@ func main() {
 		defer archiveTicker.Stop()
 		pollTicker := time.NewTicker(time.Minute)
 		defer pollTicker.Stop()
-		sweepTicker := time.NewTicker(time.Hour)
+		sweepTicker := time.NewTicker(workers.SweepInterval)
 		defer sweepTicker.Stop()
 		digestTicker := time.NewTicker(7 * 24 * time.Hour)
 		defer digestTicker.Stop()

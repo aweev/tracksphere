@@ -42,9 +42,14 @@ import (
 // SweepJob is the single-flight periodic job.
 const SweepJob = "system.sweep"
 
-// SweepLeaseTTL bounds how long one replica may hold the sweep lease. Longer
-// than the sweep interval so a slow pass cannot be stolen mid-flight; short
-// enough that a crashed holder is replaced promptly.
+// SweepInterval is the pass cadence.
+const SweepInterval = 15 * time.Minute
+
+// SweepLeaseTTL bounds how long one replica may hold the sweep lease without
+// renewing it. It only needs to exceed one tenant's worst-case time, because
+// HandleSweep renews after every tenant. The old comment claimed it was
+// "longer than the sweep interval"; at four minutes against a sixty-minute
+// interval it never was, which is why slow passes had their lease stolen.
 const SweepLeaseTTL = 4 * time.Minute
 
 // sweepLeaseName is the single lease key. Periodic work must be single-flight
@@ -307,6 +312,130 @@ func sweepTenant(ctx context.Context, tx pgx.Tx, log *slog.Logger, tenantID uuid
 		return 0, 0, fmt.Errorf("refresh before evaluate: %w", err)
 	}
 
+	// Rules due this pass, determined once per tenant. The cadence timestamp
+	// advances here, in the same transaction as the evaluation below, so a
+	// rolled-back pass does not consume any rule's interval.
+	var due []Rule
+	for _, rule := range rules {
+		if rule.TriggerType != "sweep" {
+			continue
+		}
+		// Respect the rule's own cadence. every_minutes was seeded per rule
+		// but never read, so a 120-minute rule ran on every hourly pass like
+		// everything else. A rule that has never run (NULL) is always due.
+		if rule.EveryMinutes > 0 && rule.LastEvaluatedAt != nil {
+			if time.Since(*rule.LastEvaluatedAt) < time.Duration(rule.EveryMinutes)*time.Minute {
+				continue
+			}
+		}
+		if _, err := tx.Exec(ctx,
+			`UPDATE alert_rules SET last_evaluated_at=now() WHERE id=$1`, rule.ID); err != nil {
+			return 0, 0, err
+		}
+		due = append(due, rule)
+	}
+
+	// Evaluate in stable windows until exhausted. There is no ceiling on total
+	// coverage: the loop pages by shipment_id (immutable, so membership cannot
+	// churn) and stops only on a short window. Ordering by risk_score would be
+	// nicer to read but cannot keyset stably — scores move as alerts raise —
+	// and detection requires completeness, not presentation order; the UI
+	// sorts by risk itself.
+	confirmed := map[uuid.UUID]bool{}
+	var allIDs []uuid.UUID
+
+	var cursor uuid.UUID
+	haveCursor := false
+	for {
+		candidates, next, err := loadCandidateWindow(ctx, tx, tenantID, cursor, haveCursor, limit)
+		if err != nil {
+			return 0, 0, err
+		}
+		if len(candidates) == 0 {
+			break
+		}
+		for _, c := range candidates {
+			allIDs = append(allIDs, c.shipmentID)
+		}
+		for _, rule := range due {
+			for _, c := range candidates {
+				if !rule.Scope.matches(c.fact) {
+					continue
+				}
+				fact := c.fact
+				// A rule expressed as "stale_hours > 0" means "past this
+				// shipment's own silence budget", which is the only formulation
+				// that works across ocean and air.
+				if rule.Condition.Fact == "stale_hours" && rule.Condition.Value == 0 {
+					fact.StaleHours = 0
+					if c.fact.StaleHours > c.fact.StaleThreshold {
+						fact.StaleHours = c.fact.StaleHours
+					} else {
+						continue
+					}
+				}
+				if !Evaluate(rule.Condition, fact) {
+					continue
+				}
+				ok, err := raiseFromRule(ctx, tx, log, tenantID, rule, c.shipmentID)
+				if err != nil {
+					return raised, cleared, err
+				}
+				if ok {
+					raised++
+					confirmed[c.shipmentID] = true
+				}
+			}
+		}
+		if len(candidates) < limit {
+			break
+		}
+		cursor, haveCursor = next, true
+	}
+
+	// Reconcile: auto-resolve stale_alert for the sweep-managed kinds this
+	// tenant has rules for. Anything not confirmed by this pass no longer holds.
+	if err := reconcileOpen(ctx, tx, tenantID, confirmed); err != nil {
+		return raised, cleared, err
+	}
+	// Only kinds whose rules ran this pass may auto-resolve. A rule skipped for
+	// cadence evaluated nothing, so its alerts stand as they were.
+	var dueKinds []string
+	seenKind := map[string]bool{}
+	for _, rule := range due {
+		if !seenKind[rule.Kind] {
+			seenKind[rule.Kind] = true
+			dueKinds = append(dueKinds, rule.Kind)
+		}
+	}
+	cleared, err = autoResolve(ctx, tx, log, tenantID, dueKinds)
+	if err != nil {
+		return raised, cleared, err
+	}
+
+	// Refresh the read model AGAIN so open-alert counts, risk scores and the
+	// risk ordering reflect what this pass just found, not what it started
+	// from. Without this the queue stays stale for an hour after detection.
+	// allIDs accumulates every shipment evaluated across all windows.
+	for _, id := range allIDs {
+		// Best-effort: a single bad row must not fail a pass that already
+		// raised correctly. Its needs_refresh flag stays set, so the next
+		// batch retries it.
+		_ = readmodel.Refresh(ctx, tx, id)
+	}
+	return raised, cleared, nil
+}
+
+// sweepCandidate is one shipment plus the derived facts the rules read.
+type sweepCandidate struct {
+	shipmentID uuid.UUID
+	fact       Fact
+}
+
+// loadCandidateWindow returns up to limit active shipments after cursor, plus
+// the cursor for the next window. Keyset on shipment_id keeps membership
+// stable across windows even as scores move.
+func loadCandidateWindow(ctx context.Context, tx pgx.Tx, tenantID, cursor uuid.UUID, haveCursor bool, limit int) ([]sweepCandidate, uuid.UUID, error) {
 	// Load this tenant's shipments plus the derived facts the rules read. The
 	// read model already computes them, so the sweep costs one indexed scan
 	// instead of a correlated subquery per shipment.
@@ -321,103 +450,31 @@ func sweepTenant(ctx context.Context, tx pgx.Tx, log *slog.Logger, tenantID uuid
 		FROM shipment_current c
 		WHERE c.tenant_id = $1
 		  AND c.status NOT IN ('delivered','cancelled')
-		ORDER BY c.risk_score DESC
-		LIMIT $2`, tenantID, limit)
+		  AND ($2 = false OR c.shipment_id > $3)
+		ORDER BY c.shipment_id
+		LIMIT $4`, tenantID, haveCursor, cursor, limit)
 	if err != nil {
-		return 0, 0, err
+		return nil, uuid.UUID{}, err
 	}
-	type candidate struct {
-		shipmentID uuid.UUID
-		fact       Fact
-	}
-	var candidates []candidate
+	var candidates []sweepCandidate
+	var next uuid.UUID
 	for rows.Next() {
-		var c candidate
+		var c sweepCandidate
 		if err := rows.Scan(&c.shipmentID, &c.fact.Status, &c.fact.Carrier, &c.fact.Mode,
 			&c.fact.StaleHours, &c.fact.DwellHours, &c.fact.ExpectedDwellHours,
 			&c.fact.DwellRatio, &c.fact.ETASlipHours, &c.fact.OpenAlerts); err != nil {
 			rows.Close()
-			return 0, 0, err
+			return nil, uuid.UUID{}, err
 		}
 		c.fact.StaleThreshold = StaleThreshold(c.fact.ExpectedDwellHours)
 		candidates = append(candidates, c)
+		next = c.shipmentID
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return 0, 0, err
+		return nil, uuid.UUID{}, err
 	}
-
-	// Facts that make 'stale_hours' meaningful are mode-relative, so the
-	// no-update rule is rewritten per shipment against its own threshold
-	// rather than a fixed hour count.
-	confirmed := map[uuid.UUID]bool{}
-
-	for _, rule := range rules {
-		if rule.TriggerType != "sweep" {
-			continue
-		}
-		// Respect the rule's own cadence. every_minutes was seeded per rule
-		// but never read, so a 120-minute rule ran on every hourly pass like
-		// everything else. A rule that has never run (NULL) is always due.
-		// The timestamp advances in the same transaction as the evaluation, so
-		// a rolled-back pass does not consume the interval.
-		if rule.EveryMinutes > 0 && rule.LastEvaluatedAt != nil {
-			if time.Since(*rule.LastEvaluatedAt) < time.Duration(rule.EveryMinutes)*time.Minute {
-				continue
-			}
-		}
-		if _, err := tx.Exec(ctx,
-			`UPDATE alert_rules SET last_evaluated_at=now() WHERE id=$1`, rule.ID); err != nil {
-			return 0, 0, err
-		}
-		for _, c := range candidates {
-			if !rule.Scope.matches(c.fact) {
-				continue
-			}
-			fact := c.fact
-			// A rule expressed as "stale_hours > 0" means "past this
-			// shipment's own silence budget", which is the only formulation
-			// that works across ocean and air.
-			if rule.Condition.Fact == "stale_hours" && rule.Condition.Value == 0 {
-				fact.StaleHours = 0
-				if c.fact.StaleHours > c.fact.StaleThreshold {
-					fact.StaleHours = c.fact.StaleHours
-				} else {
-					continue
-				}
-			}
-			if !Evaluate(rule.Condition, fact) {
-				continue
-			}
-			ok, err := raiseFromRule(ctx, tx, log, tenantID, rule, c.shipmentID)
-			if err != nil {
-				return raised, cleared, err
-			}
-			if ok {
-				raised++
-				confirmed[c.shipmentID] = true
-			}
-		}
-	}
-
-	// Reconcile: auto-resolve stale_alert for the sweep-managed kinds this
-	// tenant has rules for. Anything not confirmed by this pass no longer holds.
-	if err := reconcileOpen(ctx, tx, tenantID, confirmed); err != nil {
-		return raised, cleared, err
-	}
-	cleared, err = autoResolve(ctx, tx, log, tenantID)
-	if err != nil {
-		return raised, cleared, err
-	}
-
-	// Refresh the read model AGAIN so open-alert counts, risk scores and the
-	// risk ordering reflect what this pass just found, not what it started
-	// from. Without this the queue stays stale for an hour after detection.
-	ids := make([]uuid.UUID, 0, len(candidates))
-	for _, c := range candidates {
-		ids = append(ids, c.shipmentID)
-	}
-	return raised, cleared, nil
+	return candidates, next, nil
 }
 
 // raiseFromRule inserts an alert if the rule fires and no open alert of that
@@ -516,14 +573,23 @@ func reconcileOpen(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID, _ map[uui
 // The rule: a sweep-managed alert that has not been touched by a sweep for
 // SweepStaleAfter is no longer believed to be true. This is what makes every
 // "open exceptions" number trustworthy.
-func autoResolve(ctx context.Context, tx pgx.Tx, log *slog.Logger, tenantID uuid.UUID) (int, error) {
+//
+// kinds restricts the close to alert kinds whose rules actually ran this
+// pass. A rule skipped for cadence (every_minutes) did not evaluate, so its
+// alerts were not confirmed — but neither were they refuted, and closing
+// them would punish a tenant for configuring a slower rule. An empty set
+// closes nothing.
+func autoResolve(ctx context.Context, tx pgx.Tx, log *slog.Logger, tenantID uuid.UUID, kinds []string) (int, error) {
+	if len(kinds) == 0 {
+		return 0, nil
+	}
 	tag, err := tx.Exec(ctx, `
 		UPDATE alerts
 		SET status='resolved', resolved_at=now(), resolution='condition_cleared'
 		WHERE tenant_id=$1 AND status='open'
-		  AND kind IN ('stale','dwell','dwell_critical','eta_slip','recurring')
+		  AND kind = ANY($3)
 		  AND last_seen_at < now() - $2::interval`,
-		tenantID, SweepStaleAfter.String())
+		tenantID, SweepStaleAfter.String(), kinds)
 	if err != nil {
 		return 0, err
 	}
@@ -541,9 +607,12 @@ func autoResolve(ctx context.Context, tx pgx.Tx, log *slog.Logger, tenantID uuid
 }
 
 // SweepStaleAfter is how long a sweep-managed alert may go unconfirmed before it
-// is considered cleared. Two missed sweeps, so a single slow or failed pass
-// cannot mass-close a tenant's queue.
-var SweepStaleAfter = 2 * SweepLeaseTTL
+// is considered cleared: two full passes, so a single slow or failed pass
+// cannot mass-close a tenant's queue. It was 2 * SweepLeaseTTL (eight minutes
+// against an hourly pass), which auto-resolved entire queues after one hiccup
+// and re-raised them on the next pass — permanent flapping with a fresh
+// interrupt charge on every cycle.
+var SweepStaleAfter = 2 * SweepInterval
 
 // enqueueAlertNotify queues the ops notification for a new alert.
 func enqueueAlertNotify(ctx context.Context, tx pgx.Tx, tenantID, shipmentID uuid.UUID, severity string, interrupt bool, kind string) error {
@@ -587,6 +656,14 @@ func HandleSweep(pool *pgxpool.Pool, log *slog.Logger, holder string) func(conte
 			raised += r
 			cleared += c
 			escalated += e
+			// Renew after every tenant. Without this a pass longer than the
+			// TTL has its lease stolen and a second replica duplicates the
+			// remaining work. If renewal fails the lease is gone — another
+			// replica owns the window, so stop rather than duplicate it.
+			if err := RenewLease(ctx, pool, sweepLeaseName, holder, SweepLeaseTTL); err != nil {
+				log.Error("sweep lease lost mid-pass, yielding", "err", err)
+				return nil
+			}
 		}
 		if _, err := readmodelAll(ctx, pool); err != nil {
 			log.Warn("read model refresh", "err", err)
@@ -798,6 +875,24 @@ func ReleaseLease(ctx context.Context, pool *pgxpool.Pool, name, holder string) 
 	_, err := pool.Exec(ctx,
 		`DELETE FROM scheduler_leases WHERE name=$1 AND holder=$2`, name, holder)
 	return err
+}
+
+// RenewLease extends a lease the caller already holds. A pass that outlasts
+// SweepLeaseTTL without renewing has its lease stolen mid-flight and a second
+// replica starts a duplicate pass — doubled DB load and a doubled notify
+// storm. Renewal after every tenant keeps one owner for the whole pass.
+func RenewLease(ctx context.Context, pool *pgxpool.Pool, name, holder string, ttl time.Duration) error {
+	tag, err := pool.Exec(ctx, `
+		UPDATE scheduler_leases
+		SET expires_at = now() + $3::interval
+		WHERE name=$1 AND holder=$2`, name, holder, ttl.String())
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("lease %q not held by %q", name, holder)
+	}
+	return nil
 }
 
 // readmodelAll refreshes rows the sweep did not already touch.
