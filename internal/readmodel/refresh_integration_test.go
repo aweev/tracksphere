@@ -130,6 +130,90 @@ func TestRefreshBatchIsFlagDriven(t *testing.T) {
 		t.Fatalf("third batch refreshed %d, want 1 (re-dirtied row)", third)
 	}
 }
+// TestRefreshDetectsSilentShipment proves the "nothing is happening" case:
+// a shipment created ten days ago with zero carrier events must accrue
+// staleness and dwell from its creation date. Before the baseline fallback,
+// NULL propagated and the sweep's COALESCE turned it into 0, so the product's
+// headline case produced zero exceptions.
+func TestRefreshDetectsSilentShipment(t *testing.T) {
+	pool := refreshPool(t)
+	ctx := context.Background()
+
+	tenantID := uuid.New()
+	slug := "sil-" + tenantID.String()[:8]
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := db.SetSystem(ctx, tx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO tenants (id, name, slug) VALUES ($1, $2, $3)`,
+		tenantID, "Silent Probe", slug); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		cctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		tx, err := pool.Begin(cctx)
+		if err != nil {
+			return
+		}
+		defer func() { _ = tx.Rollback(cctx) }()
+		_ = db.SetSystem(cctx, tx)
+		_ = db.SetTenant(cctx, tx, tenantID)
+		_, _ = tx.Exec(cctx, `DELETE FROM tenants WHERE id=$1`, tenantID)
+		_ = tx.Commit(cctx)
+	})
+
+	var shipmentID uuid.UUID
+	if err := db.WithTenant(ctx, pool, tenantID, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `
+			INSERT INTO shipments (tenant_id, tracking_number, carrier, mode)
+			VALUES ($1, $2, 'probe-carrier', 'road') RETURNING id`,
+			tenantID, "SIL-"+tenantID.String()[:8]).Scan(&shipmentID); err != nil {
+			return err
+		}
+		// Backdate the creation: ten days of carrier silence.
+		_, err := tx.Exec(ctx,
+			`UPDATE shipments SET created_at = now() - interval '240 hours' WHERE id=$1`,
+			shipmentID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := db.WithTenant(ctx, pool, tenantID, func(tx pgx.Tx) error {
+		return Refresh(ctx, tx, shipmentID)
+	}); err != nil {
+		t.Fatalf("Refresh failed: %v", err)
+	}
+
+	var stale, dwell *float64
+	var score *int
+	if err := db.WithTenant(ctx, pool, tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `
+			SELECT stale_hours, dwell_hours, risk_score FROM shipment_current
+			WHERE shipment_id=$1`, shipmentID).Scan(&stale, &dwell, &score)
+	}); err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if stale == nil || *stale < 200 {
+		t.Errorf("stale_hours=%v; ten days of silence must accrue", stale)
+	}
+	if dwell == nil || *dwell < 200 {
+		t.Errorf("dwell_hours=%v; ten days of silence must accrue", dwell)
+	}
+	if score == nil || *score == 0 {
+		t.Errorf("risk_score=%v; a silent shipment must score above zero", score)
+	}
+}
+
 // TestRefreshPersistsBreakdown seeds a shipment with a declared value, runs
 // Refresh, and requires the persisted breakdown to carry that value with
 // valueKnown=true — and the dirty flag to be cleared. Before the breakdown

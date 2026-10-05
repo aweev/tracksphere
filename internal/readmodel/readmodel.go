@@ -233,9 +233,19 @@ func Refresh(ctx context.Context, tx pgx.Tx, shipmentID uuid.UUID) error {
 		InfoOrWarnAlerts: otherAlerts,
 		CustomerNotified: notified,
 	}
+	// Baseline for silence: the newest event if one exists, else the
+	// shipment's creation. A shipment created ten days ago with zero carrier
+	// events has been silent for ten days — that is the literal "nothing is
+	// happening" case the exception engine exists to catch, and it previously
+	// produced zero staleness and zero dwell because NULL propagated through
+	// every comparison below and the sweep's COALESCE turned it into 0.
+	baseline := lastEventAt
+	if baseline == nil {
+		baseline = createdAt
+	}
 	var staleHours *float64
-	if lastEventAt != nil {
-		h := now.Sub(*lastEventAt).Hours()
+	if baseline != nil {
+		h := now.Sub(*baseline).Hours()
 		if h > 0 {
 			staleHours = &h
 			in.StaleHours = h
@@ -243,10 +253,12 @@ func Refresh(ctx context.Context, tx pgx.Tx, shipmentID uuid.UUID) error {
 	}
 	// Dwell: how long since the last event, against the lane norm. Using the
 	// last event (not created_at) is what makes "arrived 6 days ago and nothing
-	// since" measurable, which is the whole point.
+	// since" measurable, which is the whole point. When no event exists yet,
+	// the baseline above (creation) applies, so a shipment that has never been
+	// scanned still accrues dwell against its norm.
 	var dwell, expected *float64
-	if lastEventAt != nil {
-		d := now.Sub(*lastEventAt).Hours()
+	if baseline != nil {
+		d := now.Sub(*baseline).Hours()
 		if d >= 0 {
 			dwell = &d
 			in.DwellHours = d

@@ -54,15 +54,17 @@ const sweepLeaseName = "system.sweep"
 
 // Rule is one declarative alert rule loaded from alert_rules.
 type Rule struct {
-	ID          uuid.UUID
-	TenantID    uuid.UUID
-	Name        string
-	Kind        string
-	Severity    string
-	TriggerType string
-	Scope       Scope
-	Condition   Condition
-	Raise       Raise
+	ID              uuid.UUID
+	TenantID        uuid.UUID
+	Name            string
+	Kind            string
+	Severity        string
+	TriggerType     string
+	EveryMinutes    int
+	LastEvaluatedAt *time.Time
+	Scope           Scope
+	Condition       Condition
+	Raise           Raise
 }
 
 // Scope narrows which shipments a rule considers.
@@ -353,6 +355,20 @@ func sweepTenant(ctx context.Context, tx pgx.Tx, log *slog.Logger, tenantID uuid
 	for _, rule := range rules {
 		if rule.TriggerType != "sweep" {
 			continue
+		}
+		// Respect the rule's own cadence. every_minutes was seeded per rule
+		// but never read, so a 120-minute rule ran on every hourly pass like
+		// everything else. A rule that has never run (NULL) is always due.
+		// The timestamp advances in the same transaction as the evaluation, so
+		// a rolled-back pass does not consume the interval.
+		if rule.EveryMinutes > 0 && rule.LastEvaluatedAt != nil {
+			if time.Since(*rule.LastEvaluatedAt) < time.Duration(rule.EveryMinutes)*time.Minute {
+				continue
+			}
+		}
+		if _, err := tx.Exec(ctx,
+			`UPDATE alert_rules SET last_evaluated_at=now() WHERE id=$1`, rule.ID); err != nil {
+			return 0, 0, err
 		}
 		for _, c := range candidates {
 			if !rule.Scope.matches(c.fact) {
@@ -674,7 +690,8 @@ func sweepableTenants(ctx context.Context, pool *pgxpool.Pool) ([]uuid.UUID, err
 // loadRules reads a tenant's enabled rules.
 func loadRules(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID) ([]Rule, error) {
 	rows, err := tx.Query(ctx, `
-		SELECT id, name, kind, severity, trigger_type, scope, condition, raise_spec
+		SELECT id, name, kind, severity, trigger_type, every_minutes,
+		       last_evaluated_at, scope, condition, raise_spec
 		FROM alert_rules WHERE tenant_id=$1 AND enabled`, tenantID)
 	if err != nil {
 		return nil, err
@@ -685,6 +702,7 @@ func loadRules(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID) ([]Rule, erro
 		var r Rule
 		var scope, cond, raise []byte
 		if err := rows.Scan(&r.ID, &r.Name, &r.Kind, &r.Severity, &r.TriggerType,
+			&r.EveryMinutes, &r.LastEvaluatedAt,
 			&scope, &cond, &raise); err != nil {
 			return nil, err
 		}
