@@ -168,6 +168,7 @@ type User struct {
 	Name        string    `json:"name"`
 	Role        string    `json:"role"`
 	TOTPEnabled bool      `json:"totpEnabled"`
+	Theme       string    `json:"theme"` // system | light | dark
 	CreatedAt   time.Time `json:"createdAt"`
 }
 

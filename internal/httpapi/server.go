@@ -180,6 +180,7 @@ r.Get("/shipments/{id}/legs", s.requireRole(RoleMember, s.handleListLegs))
 			r.Post("/billing/checkout", s.requireRole(RoleAdmin, s.handleCreateCheckout))
 
 			r.Get("/account/export", s.requireRole(RoleAdmin, s.handleExportAccount))
+			r.Patch("/account/theme", s.requireRole(RoleMember, s.handleUpdateTheme))
 			r.Delete("/account", s.requireRole(RoleOwner, s.handleEraseAccount))
 			r.Get("/compliance/evidence", s.requireRole(RoleOwner, s.handleEvidence))
 

@@ -70,6 +70,7 @@ export interface User {
   name: string
   role: 'owner' | 'admin' | 'member'
   totpEnabled: boolean
+  theme: 'system' | 'light' | 'dark'
   createdAt: string
 }
 
@@ -231,6 +232,18 @@ export interface Alert {
   staleHours?: number;
   openAlertCount?: number;
   customerNotified?: boolean;
+}
+
+/**
+ * One page of the exception queue. The queue is keyset-paginated: pass
+ * nextCursor back as ?cursor= to fetch the following page. Absent nextCursor
+ * means end of queue — there is deliberately no total count, because counting
+ * the whole open set on every page turn is the query pagination exists to
+ * avoid.
+ */
+export interface AlertPage {
+  alerts: Alert[];
+  nextCursor?: string;
 }
 
 export interface NotificationItem {
@@ -397,6 +410,11 @@ export const authApi = {
     request<{ totpEnabled: boolean }>('/api/v1/auth/mfa/disable', {
       method: 'POST',
       body: JSON.stringify({ code }),
+    }),
+  updateTheme: (theme: 'system' | 'light' | 'dark') =>
+    request<{ theme: string }>('/api/v1/account/theme', {
+      method: 'PATCH',
+      body: JSON.stringify({ theme }),
     }),
   resolveAlert: (id: string, body?: { rootCause?: AlertRootCause; note?: string }) =>
     request<{ ok: boolean }>(`/api/v1/alerts/${id}/resolve`, {

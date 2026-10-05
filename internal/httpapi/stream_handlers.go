@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/tracksphere/tracksphere/internal/model"
 	"github.com/tracksphere/tracksphere/internal/realtime"
 )
 
@@ -164,7 +165,14 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, stats)
 }
 
-// handleListAlerts GET /api/v1/alerts?status=open&include=snoozed
+// handleListAlerts GET /api/v1/alerts?status=open&include=snoozed&cursor=…&limit=50
+//
+// Pages by keyset, not offset: each page costs a bounded index range.
+// limit defaults to 50 and caps at 200. The response carries nextCursor when
+// another page exists; clients must treat a missing cursor as end-of-queue
+// rather than assuming total counts, which this endpoint deliberately does
+// not compute (count(*) over the whole open set on every page turn is the
+// query this pagination exists to avoid).
 func (s *Server) handleListAlerts(w http.ResponseWriter, r *http.Request) {
 	user := currentUser(r)
 	status := r.URL.Query().Get("status")
@@ -172,12 +180,25 @@ func (s *Server) handleListAlerts(w http.ResponseWriter, r *http.Request) {
 		status = "open"
 	}
 	includeSnoozed := r.URL.Query().Get("include") == "snoozed"
-	rows, err := s.listAlertsFiltered(r.Context(), user.TenantID, status, includeSnoozed)
+	limit := 50
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n >= 1 && n <= 200 {
+			limit = n
+		}
+	}
+	rows, next, err := s.listAlertsFiltered(r.Context(), user.TenantID, status, includeSnoozed, r.URL.Query().Get("cursor"), limit)
 	if err != nil {
 		s.domainError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, rows)
+	if rows == nil {
+		rows = []model.Alert{}
+	}
+	out := map[string]any{"alerts": rows}
+	if next != "" {
+		out["nextCursor"] = next
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // handleResolveAlert POST /api/v1/alerts/{id}/resolve

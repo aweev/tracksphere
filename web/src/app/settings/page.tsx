@@ -6,6 +6,7 @@ import { RequireAuth } from '@/components/RequireAuth';
 import { Card, Empty } from '@/components/ui';
 import { api, authApi, type ApiKey, type Billing, type SessionItem, type TeamMember, type User, type WebhookEndpoint } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
+import { useTheme } from '@/components/ThemeProvider';
 
 export default function SettingsPage() {
   return (
@@ -26,6 +27,7 @@ function SettingsBody() {
         <p className="text-sm text-slate-500">Profile, security, team, developers</p>
       </header>
       <ProfileCard user={user} />
+      <ThemeCard />
       <BillingCard />
       <MfaCard />
       <SessionsCard />
@@ -66,13 +68,62 @@ function ProfileCard({ user }: { user: User | null }) {
   );
 }
 
+function ThemeCard() {
+  const { theme, resolvedTheme, setTheme } = useTheme();
+  const qc = useQueryClient();
+  const [msg, setMsg] = useState('');
+  const updateTheme = useMutation({
+    mutationFn: (t: 'system' | 'light' | 'dark') => authApi.updateTheme(t),
+    onSuccess: () => {
+      setMsg('Theme preference saved.');
+      void qc.invalidateQueries({ queryKey: ['me'] });
+    },
+    onError: (e: unknown) => setMsg(e instanceof Error ? e.message : 'Save failed.'),
+  });
+  const handleSetTheme = (t: 'system' | 'light' | 'dark') => {
+    setMsg('');
+    setTheme(t);
+    updateTheme.mutate(t);
+  };
+  return (
+    <Card title="Appearance">
+      <div className="space-y-3">
+        <div className="text-sm text-slate-500">
+          Current: <span className="font-mono capitalize">{resolvedTheme}</span>
+          {theme === 'system' && ' (system)'}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {(['system', 'light', 'dark'] as const).map((t) => (
+            <button
+              key={t}
+              type="button"
+              onClick={() => handleSetTheme(t)}
+              className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
+                theme === t
+                  ? 'bg-accent-500 text-white'
+                  : 'bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-navy-800 dark:text-slate-200'
+              }`}
+            >
+              {t.charAt(0).toUpperCase() + t.slice(1)}
+            </button>
+          ))}
+        </div>
+        <p className="text-xs text-slate-500">
+          System follows your OS setting. Explicit light/dark overrides it.
+        </p>
+        {msg ? <p role="status" className="mt-2 text-sm text-slate-600">{msg}</p> : null}
+      </div>
+    </Card>
+  );
+}
+
 function BillingCard() {
   const { data } = useQuery({
     queryKey: ['billing'],
     queryFn: async () => (await api.get<Billing>('/api/v1/billing')).data,
   });
-  if (!data) return null;
   const [upgradeMsg, setUpgradeMsg] = useState('');
+  if (!data) return null;
   const upgrade = async (plan: 'growth' | 'enterprise') => {
     setUpgradeMsg('');
     try {

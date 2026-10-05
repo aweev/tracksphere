@@ -77,7 +77,7 @@ function AnalyticsBody() {
             </Card>
             <Card title="ETA ±6h">
               <div className="text-3xl font-extrabold text-navy-950">
-                {data.etaAccuracyPct !== undefined ? `${data.etaAccuracyPct.toFixed(1)}%` : '—'}
+                {data.etaAccuracyPct != null ? `${data.etaAccuracyPct.toFixed(1)}%` : '—'}
               </div>
               <div className="mt-1 text-xs text-slate-500">
                 {data.etaSamples ?? 0} ETAs scored · lane-learned
@@ -85,7 +85,7 @@ function AnalyticsBody() {
             </Card>
             <Card title="Avg transit">
               <div className="text-3xl font-extrabold text-navy-950">
-                {data.avgTransitDays !== undefined ? `${data.avgTransitDays.toFixed(1)}d` : '—'}
+                {data.avgTransitDays != null ? `${data.avgTransitDays.toFixed(1)}d` : '—'}
               </div>
               <div className="mt-1 text-xs text-slate-500">booked → delivered</div>
             </Card>
@@ -107,8 +107,8 @@ function AnalyticsBody() {
                     <div className="flex justify-between text-sm">
                       <span className="font-semibold capitalize">{c.carrier}</span>
                       <span className="font-mono text-xs text-slate-500">
-                        {c.total} ships · {c.onTimePct !== undefined ? `${c.onTimePct.toFixed(0)}% OT` : '—'}
-                        {c.avgTransitDays !== undefined ? ` · ${c.avgTransitDays.toFixed(1)}d avg` : ''}
+                        {c.total} ships · {c.onTimePct != null ? `${c.onTimePct.toFixed(0)}% OT` : '—'}
+                        {c.avgTransitDays != null ? ` · ${c.avgTransitDays.toFixed(1)}d avg` : ''}
                       </span>
                     </div>
                     <div className="mt-1"><Bar pct={c.onTimePct ?? 0} /></div>
@@ -149,12 +149,12 @@ function DigestCard() {
     <Card title="This week" action={
       <span className="text-xs text-slate-400">auto-emailed to owners Mondays</span>
     }>
-      <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm">
+<div className="flex flex-wrap gap-x-6 gap-y-2 text-sm">
         <span><strong className="font-extrabold">{data.delivered}</strong> delivered</span>
-        <span><strong className="font-extrabold">{data.onTimePct !== undefined ? `${data.onTimePct.toFixed(0)}%` : '—'}</strong> on-time</span>
+        <span><strong className="font-extrabold">{data.onTimePct != null ? `${data.onTimePct.toFixed(0)}%` : '—'}</strong> on-time</span>
         <span><strong className="font-extrabold">{data.exceptions}</strong> exceptions</span>
         <span><strong className="font-extrabold">{data.openAlerts}</strong> open alerts</span>
-        <span><strong className="font-extrabold">{data.staleShipments}</strong> stale &gt;48h</span>
+        <span><strong className="font-extrabold">{data.staleShipments}</strong> stale {">"}48h</span>
       </div>
       {data.topCarriers.length > 0 ? (
         <p className="mt-2 text-xs text-slate-500">

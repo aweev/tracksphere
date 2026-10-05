@@ -1,6 +1,6 @@
 'use client';
 
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useMemo, useState } from 'react';
 import { RequireAuth } from '@/components/RequireAuth';
@@ -10,6 +10,7 @@ import {
   authApi,
   RequestError,
   type Alert,
+  type AlertPage,
   type AlertRootCause,
   type TeamMember,
 } from '@/lib/api';
@@ -105,15 +106,29 @@ function ExceptionsBody() {
   const [expanded, setExpanded] = useState<string | null>(null);
 
   const alertsKey = ['alerts', 'open', includeSnoozed];
-  const { data: alerts, isLoading, error, refetch } = useQuery({
+  const {
+    data: pages,
+    isLoading,
+    error,
+    refetch,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useInfiniteQuery({
     queryKey: alertsKey,
-    queryFn: async () =>
-      (
-        await api.get<Alert[]>(
-          `/api/v1/alerts?status=open${includeSnoozed ? '&include=snoozed' : ''}`,
-        )
-      ).data,
+    queryFn: async ({ pageParam }: { pageParam?: string }) => {
+      const qs = new URLSearchParams({ status: 'open', limit: '50' });
+      if (includeSnoozed) qs.set('include', 'snoozed');
+      if (pageParam) qs.set('cursor', pageParam);
+      return (await api.get<AlertPage>(`/api/v1/alerts?${qs}`)).data;
+    },
+    getNextPageParam: (last) => last.nextCursor,
+    initialPageParam: undefined as string | undefined,
   });
+  const alerts = useMemo(
+    () => pages?.pages.flatMap((p) => p.alerts),
+    [pages],
+  );
 
   // Team list powers assignment. A 403 here is expected for members, and must
   // not break the page — they can still triage, just not reassign.
@@ -232,7 +247,8 @@ function ExceptionsBody() {
         // feature: an always-anxious dashboard trains a team to ignore it.
         <Empty message="All clear — no open exceptions." />
       ) : (
-        <ul className="space-y-3">
+        <>
+          <ul className="space-y-3">
           {filtered.map((a) => {
             const style = SEVERITY_STYLES[a.severity];
             const sla = slaLabel(a);
@@ -365,6 +381,19 @@ function ExceptionsBody() {
             );
           })}
         </ul>
+          {hasNextPage && (
+            <div className="mt-4 text-center">
+              <button
+                type="button"
+                disabled={isFetchingNextPage}
+                onClick={() => void fetchNextPage()}
+                className="rounded-xl border border-slate-200 px-5 py-2.5 text-sm font-semibold text-navy-950 hover:bg-slate-50 disabled:opacity-50"
+              >
+                {isFetchingNextPage ? 'Loading…' : 'Load older exceptions'}
+              </button>
+            </div>
+          )}
+        </>
       )}
     </div>
   );

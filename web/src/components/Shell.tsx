@@ -28,11 +28,20 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const [palette, setPalette] = useState(false);
   const { data: openAlerts } = useQuery({
     queryKey: ['alerts', 'open'],
-    queryFn: async () => (await api.get<Alert[]>('/api/v1/alerts?status=open')).data,
+    queryFn: async () =>
+      (
+        await api.get<{ alerts: Alert[]; nextCursor?: string }>(
+          '/api/v1/alerts?status=open&limit=50',
+        )
+      ).data,
     enabled: !!user,
     refetchInterval: 30000,
   });
-  const exceptionCount = openAlerts?.length ?? 0;
+  // The queue deliberately returns no total (counting the whole open set on
+  // every 30s badge poll is the query pagination exists to avoid), so the
+  // badge shows the first page size with a "+" when more pages exist.
+  const exceptionCount = openAlerts?.alerts.length ?? 0;
+  const exceptionOverflow = openAlerts?.nextCursor ? '+' : '';
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -91,10 +100,11 @@ export function Shell({ children }: { children: React.ReactNode }) {
                 <span className="flex-1">{item.label}</span>
                 {'badgeKey' in item && item.badgeKey === 'exceptions' && exceptionCount > 0 ? (
                   <span
-                    aria-label={`${exceptionCount} open exceptions`}
+                    aria-label={`${exceptionCount}${exceptionOverflow} open exceptions`}
                     className="rounded-full bg-red-500 px-2 py-0.5 text-[11px] font-bold text-white"
                   >
                     {exceptionCount}
+                    {exceptionOverflow}
                   </span>
                 ) : null}
               </Link>

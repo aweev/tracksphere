@@ -1,8 +1,11 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -55,11 +58,68 @@ func timeoutContext(r *http.Request, d time.Duration) (context.Context, context.
 // soonest due. snoozed_until is excluded from the default view but reachable
 // with ?include=snoozed — deferring work must not mean hiding it.
 func (s *Server) listAlerts(ctx context.Context, tenantID uuid.UUID, status string) ([]model.Alert, error) {
-	return s.listAlertsFiltered(ctx, tenantID, status, false)
+	rows, _, err := s.listAlertsFiltered(ctx, tenantID, status, false, "", 200)
+	return rows, err
 }
 
-func (s *Server) listAlertsFiltered(ctx context.Context, tenantID uuid.UUID, status string, includeSnoozed bool) ([]model.Alert, error) {
+// alertCursor is an opaque keyset position in the exception queue. The client
+// must not construct it: decode validates the shape and rejects anything
+// else, so a tampered cursor fails closed to a 400 rather than reaching SQL.
+type alertCursor struct {
+	Rank     int        `json:"r"`
+	Due      *time.Time `json:"d,omitempty"`
+	Detected time.Time  `json:"t"`
+	ID       uuid.UUID  `json:"i"`
+}
+
+func encodeAlertCursor(c alertCursor) string {
+	raw, _ := json.Marshal(c)
+	return base64.RawURLEncoding.EncodeToString(raw)
+}
+
+func decodeAlertCursor(s string) (alertCursor, error) {
+	var c alertCursor
+	if s == "" {
+		return c, fmt.Errorf("empty cursor")
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(s)
+	if err != nil {
+		return c, fmt.Errorf("bad cursor encoding: %w", err)
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&c); err != nil {
+		return c, fmt.Errorf("bad cursor: %w", err)
+	}
+	if c.Rank < 0 || c.Rank > 2 || c.ID == uuid.Nil || c.Detected.IsZero() {
+		return c, fmt.Errorf("bad cursor values")
+	}
+	return c, nil
+}
+
+// listAlertsFiltered loads one page of the exception queue, ordered the way an
+// operator works it: worst severity first, then soonest due. Keyset on
+// (severity_rank, due_at, detected_at, id) so each page costs a bounded index
+// range, not a sort of the tenant's whole open set — and so alerts past 200
+// are reachable at all, which the old hardcoded LIMIT made impossible.
+//
+// snoozed_until is excluded from the default view but reachable with
+// ?include=snoozed — deferring work must not mean hiding it.
+func (s *Server) listAlertsFiltered(ctx context.Context, tenantID uuid.UUID, status string, includeSnoozed bool, cursor string, limit int) ([]model.Alert, string, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	var cur *alertCursor
+	if cursor != "" {
+		c, err := decodeAlertCursor(cursor)
+		if err != nil {
+			return nil, "", err
+		}
+		cur = &c
+	}
+
 	out := []model.Alert{}
+	var next string
 	err := db.WithTenant(ctx, poolOf(s), tenantID, func(tx pgx.Tx) error {
 		query := `
 			SELECT a.id, a.shipment_id, a.kind, a.severity, a.title, a.message, a.status,
@@ -69,7 +129,8 @@ func (s *Server) listAlertsFiltered(ctx context.Context, tenantID uuid.UUID, sta
 			       a.root_cause, a.note, a.resolution, a.resolved_by, a.value_at_risk,
 			       s.tracking_number, s.status, s.eta,
 			       sc.risk_score, sc.risk_tier, sc.stale_hours,
-			       sc.open_alerts, sc.customer_notified
+			       sc.open_alerts, sc.customer_notified,
+			       a.severity_rank, a.id
 			FROM alerts a
 			JOIN shipments s ON s.id = a.shipment_id
 			LEFT JOIN users au ON au.id = a.assigned_to
@@ -83,35 +144,51 @@ func (s *Server) listAlertsFiltered(ctx context.Context, tenantID uuid.UUID, sta
 		if !includeSnoozed {
 			where = append(where, "(a.snoozed_until IS NULL OR a.snoozed_until < now())")
 		}
+		if cur != nil {
+			// Keyset: strictly after the cursor row in queue order. due_at
+			// NULLS LAST is expressed via COALESCE to a far-future instant so
+			// the comparison stays total; detected_at is newest-first.
+			args = append(args, cur.Rank, cur.Due, cur.Detected, cur.ID)
+			n := len(args)
+			where = append(where, fmt.Sprintf(`(
+				a.severity_rank > $%d OR
+				(a.severity_rank = $%d AND COALESCE(a.due_at,'infinity'::timestamptz) > $%d) OR
+				(a.severity_rank = $%d AND COALESCE(a.due_at,'infinity'::timestamptz) = $%d AND a.detected_at < $%d) OR
+				(a.severity_rank = $%d AND COALESCE(a.due_at,'infinity'::timestamptz) = $%d AND a.detected_at = $%d AND a.id > $%d)
+			)`, n-3, n-3, n-2, n-3, n-2, n-1, n-3, n-2, n-1, n))
+		}
 		if len(where) > 0 {
 			query += " WHERE " + strings.Join(where, " AND ")
 		}
 		query += ` ORDER BY
-		    CASE a.severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END,
+		    a.severity_rank,
 		    a.due_at NULLS LAST,
-		    a.detected_at DESC
-		  LIMIT 200`
+		    a.detected_at DESC,
+		    a.id
+		  LIMIT $` + strconv.Itoa(len(args)+1)
+		args = append(args, limit+1) // one extra to detect a next page
 
 		rs, err := tx.Query(ctx, query, args...)
 		if err != nil {
 			return err
 		}
 		defer rs.Close()
+		type row struct {
+			a    model.Alert
+			rank int
+			due  *time.Time
+		}
+		var rows []row
 		for rs.Next() {
 			var a model.Alert
-			// root_cause, note and resolution are all nullable columns: an
-			// untouched exception has none of them set.
 			var assigneeName, rootCause, note, resolution *string
-			// shipment_current is LEFT JOINed, so every column from it is
-			// NULL-able: a shipment the sweep has not reached yet must not fail
-			// the whole queue query. Each gets a pointer temp rather than
-			// scanning into the model's own pointer field, because pgx cannot
-			// decode NULL into **T.
 			var openAlerts *int
 			var riskScore *int
 			var riskTier *string
 			var staleHours *float64
 			var customerNotified *bool
+			var rank int
+			var id uuid.UUID
 			if err := rs.Scan(&a.ID, &a.ShipmentID, &a.Kind, &a.Severity,
 				&a.Title, &a.Message, &a.Status, &a.CreatedAt, &a.DetectedAt, &a.LastSeenAt,
 				&a.ResolvedAt, &a.AssignedTo, &assigneeName, &a.AssignedAt, &a.AcknowledgedAt,
@@ -119,16 +196,13 @@ func (s *Server) listAlertsFiltered(ctx context.Context, tenantID uuid.UUID, sta
 				&rootCause, &note, &resolution, &a.ResolvedBy, &a.ValueAtRisk,
 				&a.TrackingNumber, &a.ShipmentStatus, &a.ShipmentETA,
 				&riskScore, &riskTier, &staleHours,
-				&openAlerts, &customerNotified); err != nil {
+				&openAlerts, &customerNotified, &rank, &id); err != nil {
 				return err
 			}
 			if openAlerts != nil {
 				a.OpenAlertCount = *openAlerts
 			}
 			a.RiskScore, a.StaleHours = riskScore, staleHours
-			// RiskTier and CustomerNotified are value fields in the contract;
-			// a missing read-model row means "no tier yet" and "not told",
-			// which are the safe zero values, so absent stays absent.
 			if riskTier != nil {
 				a.RiskTier = *riskTier
 			}
@@ -147,11 +221,28 @@ func (s *Server) listAlertsFiltered(ctx context.Context, tenantID uuid.UUID, sta
 			if resolution != nil {
 				a.Resolution = *resolution
 			}
-			out = append(out, a)
+			rows = append(rows, row{a: a, rank: rank, due: a.DueAt})
 		}
-		return rs.Err()
+		if err := rs.Err(); err != nil {
+			return err
+		}
+		for _, r := range rows {
+			if len(out) >= limit {
+				// The extra row exists: there is a next page, starting here.
+				next = encodeAlertCursor(alertCursor{
+					Rank: r.rank, Due: r.due,
+					Detected: r.a.DetectedAt, ID: r.a.ID,
+				})
+				break
+			}
+			out = append(out, r.a)
+		}
+		return nil
 	})
-	return out, err
+	if err != nil {
+		return nil, "", err
+	}
+	return out, next, nil
 }
 
 // poolOf is a readability alias; the tenant-scoped transaction helper is the

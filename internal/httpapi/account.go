@@ -136,6 +136,29 @@ type eraseRequest struct {
 	Confirm string `json:"confirm"`
 }
 
+type themeRequest struct {
+	Theme string `json:"theme"`
+}
+
+// handleUpdateTheme PATCH /api/v1/account/theme — update user's theme preference.
+func (s *Server) handleUpdateTheme(w http.ResponseWriter, r *http.Request) {
+	var req themeRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if req.Theme != "system" && req.Theme != "light" && req.Theme != "dark" {
+		writeError(w, http.StatusBadRequest, "invalid_input", "theme must be system, light, or dark")
+		return
+	}
+	user := currentUser(r)
+	if _, err := s.pool.Exec(r.Context(),
+		`UPDATE users SET theme=$2, updated_at=now() WHERE id=$1`, user.ID, req.Theme); err != nil {
+		s.domainError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"theme": req.Theme})
+}
+
 // handleEraseAccount DELETE /api/v1/account (owner only, confirm:"ERASE").
 // Cascades through every tenant FK — the tenant row is the isolation
 // boundary, so deleting it erases everything. Irreversible by design.

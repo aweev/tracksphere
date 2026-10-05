@@ -40,10 +40,10 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	)
 	err := s.pool.QueryRow(r.Context(), `
 		SELECT id, tenant_id, email, name, role, password_hash, totp_secret,
-		       totp_enabled, is_active, created_at
+		       totp_enabled, theme, is_active, created_at
 		FROM users WHERE lower(email)=$1`, req.Email).
 		Scan(&user.ID, &user.TenantID, &user.Email, &user.Name, &user.Role,
-			&passwordHash, &totpSecret, &user.TOTPEnabled, &active, &user.CreatedAt)
+			&passwordHash, &totpSecret, &user.TOTPEnabled, &user.Theme, &active, &user.CreatedAt)
 	// Uniform error for unknown email vs bad password (no user enumeration).
 	if err != nil || !active || !auth.VerifyPassword(passwordHash, req.Password) {
 		s.auditEvent(r.Context(), nil, nil, req.Email, "login_failed", r)

@@ -54,6 +54,150 @@
   --font-mono: 'JetBrains Mono', ui-monospace, monospace;
 }
 
+/* Dark mode overrides */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    /* Brand stays same */
+    --color-navy-950: #f8fafc;       /* slate-50 */
+    --color-navy-900: #e2e8f0;       /* slate-200 */
+    --color-navy-800: #cbd5e1;       /* slate-300 */
+    
+    /* Risk tiers adapted for dark */
+    --color-risk-critical: #fca5a5;    /* red-300 */
+    --color-risk-critical-bg: #7f1d1d; /* red-900 */
+    --color-risk-at-risk: #fdba74;     /* orange-300 */
+    --color-risk-at-risk-bg: #7c2d12;  /* orange-900 */
+    --color-risk-watch: #fde047;       /* yellow-300 */
+    --color-risk-watch-bg: #713f12;    /* yellow-900 */
+    --color-risk-clear: #86efac;       /* green-300 */
+    --color-risk-clear-bg: #14532d;    /* green-900 */
+
+    /* Semantic Text inverted */
+    --color-text-primary: #f8fafc;     /* slate-50 */
+    --color-text-secondary: #e2e8f0;   /* slate-200 */
+    --color-text-muted: #94a3b8;       /* slate-400 */
+    --color-text-disabled: #64748b;    /* slate-500 */
+
+    /* Semantic Status adapted for dark */
+    --color-status-booked-bg: #334155;     /* slate-700 */
+    --color-status-booked-text: #f1f5f9;   /* slate-100 */
+    --color-status-in_transit-bg: #1e3a5f; /* blue-900/50 */
+    --color-status-in_transit-text: #93c5fd; /* blue-300 */
+    --color-status-at_customs-bg: #78350f; /* amber-900 */
+    --color-status-at_customs-text: #fde68a; /* amber-200 */
+    --color-status-out_for_delivery-bg: #4c1d95; /* violet-900 */
+    --color-status-out_for_delivery-text: #ddd6fe; /* violet-200 */
+    --color-status-delivered-bg: #14532d;  /* green-900 */
+    --color-status-delivered-text: #86efac;  /* green-300 */
+    --color-status-exception-bg: #7f1d1d;  /* red-900 */
+    --color-status-exception-text: #fca5a5;  /* red-300 */
+    --color-status-cancelled-bg: #334155;  /* slate-700 */
+    --color-status-cancelled-text: #94a3b8;  /* slate-400 */
+
+    /* Focus Ring */
+    --color-focus-ring: #ff6b00;       /* accent-500 */
+    --color-focus-ring-offset: #0f172a; /* slate-950 */
+
+    /* Borders */
+    --color-border-subtle: #334155;    /* slate-700 */
+    --color-border-emphasis: #475569;  /* slate-600 */
+  }
+}
+
+/* Explicit light mode (for data-theme="light") */
+[data-theme="light"] {
+  /* Brand */
+  --color-navy-950: #0f172a;
+  --color-navy-900: #1e293b;
+  --color-navy-800: #334155;
+  --color-accent-500: #ff6b00;
+  --color-accent-600: #e66000;
+
+  /* Semantic Risk Tiers */
+  --color-risk-critical: #b91c1c;
+  --color-risk-critical-bg: #fef2f2;
+  --color-risk-at-risk: #c2410c;
+  --color-risk-at-risk-bg: #fff7ed;
+  --color-risk-watch: #a16207;
+  --color-risk-watch-bg: #fefce8;
+  --color-risk-clear: #15803d;
+  --color-risk-clear-bg: #f0fdf4;
+
+  /* Semantic Text */
+  --color-text-primary: #0f172a;
+  --color-text-secondary: #334155;
+  --color-text-muted: #475569;
+  --color-text-disabled: #94a3b8;
+
+  /* Semantic Status */
+  --color-status-booked-bg: #e2e8f0;
+  --color-status-booked-text: #334155;
+  --color-status-in_transit-bg: #dbeafe;
+  --color-status-in_transit-text: #1d4ed8;
+  --color-status-at_customs-bg: #fef3c7;
+  --color-status-at_customs-text: #b45309;
+  --color-status-out_for_delivery-bg: #ede9fe;
+  --color-status-out_for_delivery-text: #7c3aed;
+  --color-status-delivered-bg: #dcfce7;
+  --color-status-delivered-text: #16a34a;
+  --color-status-exception-bg: #fee2e2;
+  --color-status-exception-text: #dc2626;
+  --color-status-cancelled-bg: #e2e8f0;
+  --color-status-cancelled-text: #475569;
+
+  /* Focus Ring */
+  --color-focus-ring: #ff6b00;
+  --color-focus-ring-offset: #ffffff;
+
+  /* Borders */
+  --color-border-subtle: #e2e8f0;
+  --color-border-emphasis: #cbd5e1;
+}
+
+/* Explicit dark mode (for data-theme="dark") */
+[data-theme="dark"] {
+  --color-navy-950: #f8fafc;
+  --color-navy-900: #e2e8f0;
+  --color-navy-800: #cbd5e1;
+  --color-accent-500: #ff6b00;
+  --color-accent-600: #e66000;
+
+  --color-risk-critical: #fca5a5;
+  --color-risk-critical-bg: #7f1d1d;
+  --color-risk-at-risk: #fdba74;
+  --color-risk-at-risk-bg: #7c2d12;
+  --color-risk-watch: #fde047;
+  --color-risk-watch-bg: #713f12;
+  --color-risk-clear: #86efac;
+  --color-risk-clear-bg: #14532d;
+
+  --color-text-primary: #f8fafc;
+  --color-text-secondary: #e2e8f0;
+  --color-text-muted: #94a3b8;
+  --color-text-disabled: #64748b;
+
+  --color-status-booked-bg: #334155;
+  --color-status-booked-text: #f1f5f9;
+  --color-status-in_transit-bg: #1e3a5f;
+  --color-status-in_transit-text: #93c5fd;
+  --color-status-at_customs-bg: #78350f;
+  --color-status-at_customs-text: #fde68a;
+  --color-status-out_for_delivery-bg: #4c1d95;
+  --color-status-out_for_delivery-text: #ddd6fe;
+  --color-status-delivered-bg: #14532d;
+  --color-status-delivered-text: #86efac;
+  --color-status-exception-bg: #7f1d1d;
+  --color-status-exception-text: #fca5a5;
+  --color-status-cancelled-bg: #334155;
+  --color-status-cancelled-text: #94a3b8;
+
+  --color-focus-ring: #ff6b00;
+  --color-focus-ring-offset: #0f172a;
+
+  --color-border-subtle: #334155;
+  --color-border-emphasis: #475569;
+}
+
 html,
 body,
 #__next {
@@ -62,6 +206,24 @@ body,
 
 body {
   @apply bg-slate-100 text-slate-900 font-sans antialiased;
+  background-color: var(--color-navy-900);
+  color: var(--color-text-primary);
+}
+
+/* Dark mode body background */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) body {
+    background-color: var(--color-navy-950);
+    color: var(--color-text-primary);
+  }
+}
+[data-theme="light"] body {
+  background-color: var(--color-navy-900);
+  color: var(--color-text-primary);
+}
+[data-theme="dark"] body {
+  background-color: var(--color-navy-950);
+  color: var(--color-text-primary);
 }
 
 /* Status pills using semantic tokens */

@@ -85,8 +85,10 @@ func (s *Server) buildCSP(nonce string) string {
 		"frame-src 'self' https:",
 	}
 
-	// In production, add HSTS
-	if s.cfg.Env == "production" {
+	// In development, allow unsafe-eval for React DevTools / hot reload
+	if s.cfg.Env != "production" {
+		directives[1] = "script-src 'self' 'nonce-" + nonce + "' 'unsafe-eval'"
+	} else {
 		directives = append(directives, "upgrade-insecure-requests")
 	}
 
@@ -164,13 +166,13 @@ func (s *Server) sessionUser(ctx context.Context, rawToken string) (*model.User,
 		      AND (last_seen_at IS NULL OR last_seen_at < now() - interval '1 minute')
 		    RETURNING 1
 		)
-		SELECT u.id, u.tenant_id, u.email, u.name, u.role, u.totp_enabled,
+		SELECT u.id, u.tenant_id, u.email, u.name, u.role, u.totp_enabled, u.theme,
 		       u.is_active, u.created_at, s.expires_at, s.mfa_pending,
 		       NOT EXISTS (SELECT 1 FROM touch)
 		FROM sessions s
 		JOIN users u ON u.id = s.user_id
 		WHERE s.token_hash = $1`, hash).
-		Scan(&u.ID, &u.TenantID, &u.Email, &u.Name, &u.Role, &totpOn,
+		Scan(&u.ID, &u.TenantID, &u.Email, &u.Name, &u.Role, &totpOn, &u.Theme,
 			&active, &u.CreatedAt, &expires, &mfaPend, &stale)
 	if err != nil {
 		return nil, err
