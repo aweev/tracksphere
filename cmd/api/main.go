@@ -15,6 +15,7 @@ import (
 	"github.com/tracksphere/tracksphere/internal/config"
 	"github.com/tracksphere/tracksphere/internal/db"
 	"github.com/tracksphere/tracksphere/internal/httpapi"
+	"github.com/tracksphere/tracksphere/internal/metrics"
 	"github.com/tracksphere/tracksphere/internal/queue"
 	"github.com/tracksphere/tracksphere/internal/realtime"
 	"github.com/tracksphere/tracksphere/internal/shipments"
@@ -56,6 +57,26 @@ func main() {
 
 	// Realtime listener (LISTEN/NOTIFY → SSE)
 	go hub.Run(ctx, pool)
+
+	// Update DB pool metrics periodically for Prometheus
+	go func() {
+		ticker := time.NewTicker(15 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				stats := pool.Stat()
+				metrics.UpdateDBPoolMetrics(
+					int(stats.AcquiredConns()),
+					int(stats.IdleConns()),
+					int(stats.TotalConns()),
+					int(stats.MaxConns()),
+				)
+			}
+		}
+	}()
 
 	httpServer := &http.Server{
 		Addr:              cfg.HTTPAddr,

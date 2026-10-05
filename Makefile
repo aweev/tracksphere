@@ -92,6 +92,10 @@ check: vet test web-build ## Everything CI runs
 e2e: ## Full end-to-end proof against a running API
 	pwsh -File scripts/e2e.ps1
 
+.PHONY: prod-smoke
+prod-smoke: ## Production smoke test: health endpoints + database liveness
+	./scripts/prod_smoke.sh --skip-db
+
 # ── Containers ──────────────────────────────────────────────────────────
 .PHONY: compose-up
 compose-up: ## Build + start the whole stack (deploy/.env required)

@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // handleMetrics GET /api/v1/metrics — Prometheus exposition for the one thing
@@ -21,44 +23,27 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+
 	perTenant := r.URL.Query().Get("per_tenant") == "true"
-	var pending, running, dead int64
-	err := s.pool.QueryRow(r.Context(),
-		`SELECT count(*) FILTER (WHERE status='pending'),
-		        count(*) FILTER (WHERE status='running'),
-		        count(*) FILTER (WHERE status='dead') FROM jobs`).
-		Scan(&pending, &running, &dead)
-	if err != nil {
-		s.log.Error("metrics query failed", "err", err)
-	}
 
-	stats := s.pool.Stat()
-	var out strings.Builder
+	// Always emit the standard Prometheus gauges/counters first.
+	promhttp.Handler().ServeHTTP(w, r)
 
-	// Global metrics (always emitted)
-	writeGauge(&out, "tracksphere_jobs_pending", "Jobs waiting to run", pending, nil)
-	writeGauge(&out, "tracksphere_jobs_running", "Jobs claimed by workers", running, nil)
-	writeGauge(&out, "tracksphere_jobs_dead", "Jobs exhausted (DLQ)", dead, nil)
-	writeGauge(&out, "tracksphere_sse_clients", "SSE subscribers connected", int64(s.hub.Count()), nil)
-	writeGauge(&out, "tracksphere_db_conns_acquired", "Pool connections checked out", int64(stats.AcquiredConns()), nil)
-	writeGauge(&out, "tracksphere_db_conns_total", "Pool connections total", int64(stats.TotalConns()), nil)
-	writeGauge(&out, "tracksphere_db_conns_idle", "Pool connections idle", int64(stats.IdleConns()), nil)
-	writeGauge(&out, "tracksphere_db_conns_max", "Pool max connections", int64(stats.MaxConns()), nil)
-	writeGauge(&out, "tracksphere_db_pool_utilization_pct", "Pool utilization percentage", int64(float64(stats.AcquiredConns())/float64(stats.MaxConns())*100), nil)
-	writeGauge(&out, "tracksphere_ratelimit_buckets", "Live rate-limit buckets", int64(s.limiter.Buckets()), nil)
-
-	// Per-tenant queue metrics (admin only, opt-in)
-	if perTenant {
-		if !s.requireRoleForMetrics(r, "admin") {
-			writeError(w, http.StatusForbidden, "forbidden", "Per-tenant metrics require admin role")
+	// Preserve the DB-backed tenant metrics as an extension of the default scrape.
+	if perTenant && s.requireRoleForMetrics(r, "admin") {
+		if _, err := w.Write([]byte("\n")); err != nil {
+			s.log.Error("write metrics separator failed", "err", err)
 			return
 		}
+		var out strings.Builder
 		s.writePerTenantMetrics(&out, r.Context())
+		if out.Len() > 0 {
+			if _, err := w.Write([]byte(out.String())); err != nil {
+				s.log.Error("write per-tenant metrics failed", "err", err)
+			}
+		}
 	}
-
-	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(out.String()))
 }
 
 func (s *Server) requireRoleForMetrics(r *http.Request, minRole string) bool {

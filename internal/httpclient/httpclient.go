@@ -7,16 +7,17 @@ import (
 	"time"
 
 	"github.com/tracksphere/tracksphere/internal/circuitbreaker"
+	"github.com/tracksphere/tracksphere/internal/metrics"
 )
 
 // ClientConfig holds configuration for an outbound HTTP client
 type ClientConfig struct {
-	Name                string
-	Timeout             time.Duration
-	MaxIdleConns        int
-	MaxConnsPerHost     int
-	IdleConnTimeout     time.Duration
-	TLSHandshakeTimeout time.Duration
+	Name                  string
+	Timeout               time.Duration
+	MaxIdleConns          int
+	MaxConnsPerHost       int
+	IdleConnTimeout       time.Duration
+	TLSHandshakeTimeout   time.Duration
 	ExpectContinueTimeout time.Duration
 
 	// Circuit breaker config
@@ -25,23 +26,23 @@ type ClientConfig struct {
 
 // CircuitBreakerConfig holds circuit breaker specific settings
 type CircuitBreakerConfig struct {
-	Enabled        bool
-	MaxRequests    uint32
-	Interval       time.Duration
-	Timeout        time.Duration
-	ReadyToTrip    func(circuitbreaker.Counts) bool
-	OnStateChange  func(name string, from circuitbreaker.State, to circuitbreaker.State)
+	Enabled       bool
+	MaxRequests   uint32
+	Interval      time.Duration
+	Timeout       time.Duration
+	ReadyToTrip   func(circuitbreaker.Counts) bool
+	OnStateChange func(name string, from circuitbreaker.State, to circuitbreaker.State)
 }
 
 // DefaultClientConfig returns a sensible default configuration
 func DefaultClientConfig(name string) ClientConfig {
 	return ClientConfig{
-		Name:                name,
-		Timeout:             30 * time.Second,
-		MaxIdleConns:        100,
-		MaxConnsPerHost:     10,
-		IdleConnTimeout:     90 * time.Second,
-		TLSHandshakeTimeout: 10 * time.Second,
+		Name:                  name,
+		Timeout:               30 * time.Second,
+		MaxIdleConns:          100,
+		MaxConnsPerHost:       10,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 		CircuitBreaker: CircuitBreakerConfig{
 			Enabled:     true,
@@ -90,12 +91,22 @@ func NewClient(config ClientConfig) *Client {
 	var cb *circuitbreaker.CircuitBreaker
 	if config.CircuitBreaker.Enabled {
 		cb = circuitbreaker.NewCircuitBreaker(circuitbreaker.Config{
-			Name:          config.Name,
-			MaxRequests:   config.CircuitBreaker.MaxRequests,
-			Interval:      config.CircuitBreaker.Interval,
-			Timeout:       config.CircuitBreaker.Timeout,
-			ReadyToTrip:   config.CircuitBreaker.ReadyToTrip,
-			OnStateChange: config.CircuitBreaker.OnStateChange,
+			Name:        config.Name,
+			MaxRequests: config.CircuitBreaker.MaxRequests,
+			Interval:    config.CircuitBreaker.Interval,
+			Timeout:     config.CircuitBreaker.Timeout,
+			ReadyToTrip: config.CircuitBreaker.ReadyToTrip,
+			OnStateChange: func(name string, from circuitbreaker.State, to circuitbreaker.State) {
+				metrics.RecordCircuitBreakerState(name, int(to))
+				if to == circuitbreaker.StateOpen {
+					metrics.RecordCircuitBreakerTrip(name)
+				}
+				// Chain, don't replace: callers that passed their own hook in
+				// config must still observe transitions.
+				if config.CircuitBreaker.OnStateChange != nil {
+					config.CircuitBreaker.OnStateChange(name, from, to)
+				}
+			},
 		})
 	}
 
@@ -117,6 +128,9 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 		resp, e = c.Client.Do(req)
 		return e
 	})
+	if err != nil {
+		metrics.RecordCircuitBreakerFailure(c.cb.Name())
+	}
 	return resp, err
 }
 
@@ -142,16 +156,16 @@ func (c *Client) CircuitBreaker() *circuitbreaker.CircuitBreaker {
 var (
 	// CarrierAPIClient for carrier webhook polling
 	CarrierAPIClient = DefaultClientConfig("carrier-api")
-	
+
 	// NotificationProviderClient for email/SMS/WhatsApp providers
 	NotificationProviderClient = DefaultClientConfig("notification-provider")
-	
+
 	// StripeClient for Stripe API calls
 	StripeClient = DefaultClientConfig("stripe")
-	
+
 	// EcommerceClient for Shopify/WooCommerce webhooks
 	EcommerceClient = DefaultClientConfig("ecommerce")
-	
+
 	// WebhookDispatchClient for tenant outbound webhooks
 	WebhookDispatchClient = DefaultClientConfig("webhook-dispatch")
 )

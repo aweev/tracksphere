@@ -252,6 +252,11 @@ func (cb *CircuitBreaker) State() State {
 	return state
 }
 
+// Name returns the circuit breaker name
+func (cb *CircuitBreaker) Name() string {
+	return cb.name
+}
+
 // Counts returns current counts
 func (cb *CircuitBreaker) Counts() Counts {
 	cb.mu.Lock()

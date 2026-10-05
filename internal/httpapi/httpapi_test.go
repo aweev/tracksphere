@@ -4,7 +4,12 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/tracksphere/tracksphere/internal/config"
 )
 
 func sign(secret, body string) string {
@@ -61,5 +66,20 @@ func TestSlugify(t *testing.T) {
 func TestItoa(t *testing.T) {
 	if itoa(0) != "0" || itoa(7) != "7" || itoa(42) != "42" {
 		t.Fatalf("itoa broken: %s %s %s", itoa(0), itoa(7), itoa(42))
+	}
+}
+
+func TestHandleMetricsUsesPrometheusContentType(t *testing.T) {
+	s := &Server{cfg: &config.Config{ExposeMetrics: true}}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics", nil)
+	res := httptest.NewRecorder()
+
+	s.handleMetrics(res, req)
+
+	if got := res.Header().Get("Content-Type"); !strings.Contains(got, "text/plain") {
+		t.Fatalf("expected Prometheus text/plain content type, got %q", got)
+	}
+	if got := res.Body.String(); !strings.Contains(got, "# HELP") || !strings.Contains(got, "# TYPE") {
+		t.Fatalf("expected Prometheus metric payload in response, got: %q", got)
 	}
 }

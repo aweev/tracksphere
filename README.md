@@ -31,6 +31,7 @@ Verify everything works:
 ```powershell
 ./scripts/dev.ps1 e2e        # full-stack assertions
 ./scripts/dev.ps1 rls-test   # tenant-isolation proof at the database layer
+make prod-smoke             # health + status smoke check against the running API
 ```
 
 > macOS/Linux: every task also exists as a `make` target — `make help`.

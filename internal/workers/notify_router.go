@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/tracksphere/tracksphere/internal/db"
+	"github.com/tracksphere/tracksphere/internal/metrics"
 	"github.com/tracksphere/tracksphere/internal/notify"
 )
 
@@ -196,7 +197,10 @@ func HandleAlertNotify(pool *pgxpool.Pool, log *slog.Logger) func(context.Contex
 			if err != nil {
 				return err
 			}
-			type recipient struct{ id uuid.UUID; email string }
+			type recipient struct {
+				id    uuid.UUID
+				email string
+			}
 			var targets []recipient
 			for rows.Next() {
 				var t recipient
@@ -253,17 +257,19 @@ func HandleAlertNotify(pool *pgxpool.Pool, log *slog.Logger) func(context.Contex
 					// Record the interrupt so the ledger enforces the ceiling
 					// for the next sender in this same sweep pass.
 					if _, err := tx.Exec(ctx, `
-						INSERT INTO notification_interrupts
-							(tenant_id, recipient_hash, shipment_id, alert_id, severity)
-						VALUES ($1,$2,$3,NULL,$4)`, tenantID, rhash, shipmentID, severity); err != nil {
+					INSERT INTO notification_interrupts
+						(tenant_id, recipient_hash, shipment_id, alert_id, severity)
+					VALUES ($1,$2,$3,NULL,$4)`, tenantID, rhash, shipmentID, severity); err != nil {
 						return err
 					}
+					metrics.InterruptsSentTotal.WithLabelValues(tenantID.String(), severity).Inc()
 					shipped++
 				} else {
 					if err := queueDigest(ctx, tx, tenantID, rhash, shipmentID,
 						severity, subject, bodyText, route.Reason); err != nil {
 						return err
 					}
+					metrics.InterruptsQueuedTotal.WithLabelValues(tenantID.String(), route.Reason).Inc()
 				}
 			}
 
@@ -314,9 +320,12 @@ func deliver(ctx context.Context, tx pgx.Tx, log *slog.Logger, tenantID, shipmen
 	}
 	// Send AFTER the row so a provider failure leaves an auditable record
 	// rather than a silent loss.
+	metrics.NotificationsAttemptedTotal.WithLabelValues(channel, tenantID.String()).Inc()
 	if err := sender.Send(ctx, channel, to, subject, body); err != nil {
+		metrics.NotificationsFailedTotal.WithLabelValues(channel, tenantID.String(), "send_failed").Inc()
 		return err
 	}
+	metrics.NotificationsSentTotal.WithLabelValues(channel, tenantID.String()).Inc()
 	return nil
 }
 
@@ -471,6 +480,7 @@ func HandleFlushDigests(pool *pgxpool.Pool, log *slog.Logger) func(context.Conte
 						(tenant_id, channel, recipient, recipient_hash, action, reason)
 					VALUES ($1,'email',$2,$3,'delivered','digest')`,
 					b.tenant, b.rhash, b.rhash)
+				metrics.DigestsFlushedTotal.WithLabelValues(b.tenant.String()).Inc()
 				return nil
 			}); err != nil {
 				log.Warn("digest flush", "tenant", b.tenant, "err", err)

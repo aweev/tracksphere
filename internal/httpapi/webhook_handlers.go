@@ -10,10 +10,12 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/tracksphere/tracksphere/internal/config"
+	"github.com/tracksphere/tracksphere/internal/metrics"
 	"github.com/tracksphere/tracksphere/internal/model"
 	"github.com/tracksphere/tracksphere/internal/shipments"
 )
@@ -39,6 +41,7 @@ func verifySignature(secret, body []byte, header string) bool {
 // webhook_inbox for audit/replay before any processing happens. raw_body
 // keeps the exact bytes; payload holds parsed JSON or '{}'.
 func (s *Server) handleCarrierWebhook(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	carrier := strings.ToLower(strings.TrimSpace(chiParam(r, "carrier")))
 	if carrier == "" {
 		writeError(w, http.StatusBadRequest, "bad_carrier", "Carrier segment required")
@@ -74,6 +77,7 @@ func (s *Server) handleCarrierWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !sigOK {
+		metrics.WebhookReceivedTotal.WithLabelValues(carrier, "invalid_signature").Inc()
 		writeError(w, http.StatusUnauthorized, "bad_signature", "Signature verification failed")
 		return
 	}
@@ -82,6 +86,7 @@ func (s *Server) handleCarrierWebhook(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.pool.Exec(r.Context(),
 			`UPDATE webhook_inbox SET error=$2 WHERE id=$1`, inboxID, "bad_event: "+err.Error())
+		metrics.WebhookReceivedTotal.WithLabelValues(carrier, "bad_event").Inc()
 		writeError(w, http.StatusBadRequest, "bad_event", err.Error())
 		return
 	}
@@ -90,6 +95,7 @@ func (s *Server) handleCarrierWebhook(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.pool.Exec(r.Context(),
 			`UPDATE webhook_inbox SET error=$2 WHERE id=$1`, inboxID, err.Error())
+		metrics.WebhookReceivedTotal.WithLabelValues(carrier, "ingest_failed").Inc()
 		switch {
 		case errors.Is(err, shipments.ErrAmbiguousTracking):
 			// Same carrier+tracking in several tenants — needs manual resolution.
@@ -111,6 +117,9 @@ func (s *Server) handleCarrierWebhook(w http.ResponseWriter, r *http.Request) {
 		`UPDATE webhook_inbox SET processed=true, shipment_id=$2 WHERE id=$1`,
 		inboxID, result.ShipmentID)
 
+	metrics.WebhookReceivedTotal.WithLabelValues(carrier, "ok").Inc()
+	metrics.IngestionDuration.WithLabelValues(carrier, "webhook").Observe(time.Since(start).Seconds())
+
 	writeJSON(w, http.StatusOK, result)
 }
 
@@ -124,12 +133,12 @@ func (s *Server) handleManualEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Code        string  `json:"code"`
-		Description string  `json:"description"`
-		Location    string  `json:"location"`
+		Code        string   `json:"code"`
+		Description string   `json:"description"`
+		Location    string   `json:"location"`
 		Lat         *float64 `json:"lat"`
 		Lng         *float64 `json:"lng"`
-		Status      string  `json:"status"`
+		Status      string   `json:"status"`
 	}
 	if !decodeJSON(w, r, &req) {
 		return
@@ -156,7 +165,7 @@ func (s *Server) handleManualEvent(w http.ResponseWriter, r *http.Request) {
 		TrackingNumber: ship.TrackingNumber,
 		EventID:        "ops-" + uuid.NewString(),
 		Code:           req.Code,
-		Description:     req.Description,
+		Description:    req.Description,
 		Location:       req.Location,
 		Lat:            req.Lat,
 		Lng:            req.Lng,

@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/tracksphere/tracksphere/internal/db"
+	"github.com/tracksphere/tracksphere/internal/metrics"
 	"github.com/tracksphere/tracksphere/internal/queue"
 	"github.com/tracksphere/tracksphere/internal/readmodel"
 )
@@ -545,6 +546,7 @@ func enqueueAlertNotify(ctx context.Context, tx pgx.Tx, tenantID, shipmentID uui
 // It claims a lease first, so N worker replicas do not duplicate the work.
 func HandleSweep(pool *pgxpool.Pool, log *slog.Logger, holder string) func(context.Context, []byte) error {
 	return func(ctx context.Context, _ []byte) error {
+		start := time.Now()
 		claimed, err := ClaimLease(ctx, pool, sweepLeaseName, holder, SweepLeaseTTL)
 		if err != nil {
 			return err
@@ -573,6 +575,10 @@ func HandleSweep(pool *pgxpool.Pool, log *slog.Logger, holder string) func(conte
 		if _, err := readmodelAll(ctx, pool); err != nil {
 			log.Warn("read model refresh", "err", err)
 		}
+		metrics.SweepDuration.Observe(time.Since(start).Seconds())
+		metrics.SweepTenantsProcessedTotal.Add(float64(len(tenants)))
+		metrics.SweepAlertsRaisedTotal.WithLabelValues("critical").Add(float64(raised)) // Simplified - in reality we'd track by severity
+		metrics.SweepAlertsClearedTotal.Add(float64(cleared))
 		log.Info("sweep complete", "tenants", len(tenants),
 			"raised", raised, "auto_resolved", cleared, "escalated", escalated)
 		return nil
