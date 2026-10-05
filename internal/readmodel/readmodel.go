@@ -15,6 +15,8 @@ package readmodel
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"math"
 	"time"
 
@@ -34,7 +36,28 @@ type Input struct {
 	CriticalAlerts     int
 	InfoOrWarnAlerts   int
 	ValueAtRisk        float64
-	CustomerNotified   bool
+	// ValueKnown records whether a declared cargo value was supplied. A missing
+	// value is not a zero: imputing 0 would read as "no money at risk", which
+	// is the opposite of the truth, so the value term applies only when known.
+	ValueKnown       bool
+	CustomerNotified bool
+}
+
+// Breakdown explains a score term-by-term in the points each contributed, so
+// the UI can render "why this risk" exactly as computed instead of
+// re-deriving the weights in TypeScript (which drifts — shipments/page.tsx
+// once carried two inline copies). Value + ValueKnown mirror the Input: when
+// no cargo value was declared the tooltip says so honestly rather than
+// showing a silent 0/15. Relief is negative by construction.
+type Breakdown struct {
+	Dwell      float64 `json:"dwell"`
+	Slip       float64 `json:"slip"`
+	Stale      float64 `json:"stale"`
+	Critical   float64 `json:"critical"`
+	Alerts     float64 `json:"alerts"`
+	Value      float64 `json:"value"`
+	ValueKnown bool    `json:"valueKnown"`
+	Relief     float64 `json:"relief"`
 }
 
 // Weights. Deliberately bounded and documented: an unexplainable score is worse
@@ -56,30 +79,37 @@ const (
 	tierWatch    = 15
 )
 
-// Score returns a 0-100 risk score and its tier. Deterministic and pure, so it
-// is unit-testable and cannot drift between processes.
-func Score(in Input) (int, string) {
+// Score returns a 0-100 risk score, its tier, and the per-term breakdown.
+// Deterministic and pure, so it is unit-testable and cannot drift between
+// processes. The breakdown is the single home of the weights: anything that
+// explains a score must render these numbers, never recompute them.
+func Score(in Input) (int, string, Breakdown) {
 	var score float64
+	var b Breakdown
+	b.ValueKnown = in.ValueKnown
 
 	// Dwell ratio: 1.0 is on plan, 2.0 is double the expected transit.
 	if in.ExpectedDwellHours > 0 {
 		ratio := in.DwellHours / in.ExpectedDwellHours
 		if ratio > 1 {
-			score += math.Min((ratio-1)*wDwellMax, wDwellMax)
+			b.Dwell = math.Min((ratio-1)*wDwellMax, wDwellMax)
+			score += b.Dwell
 		}
 	} else if in.DwellHours > 0 {
 		// No norm available: fall back to absolute dwell by mode.
 		if in.DwellHours > 21*24 {
-			score += wDwellMax
+			b.Dwell = wDwellMax
 		} else if in.DwellHours > 10*24 {
-			score += wDwellMax / 2
+			b.Dwell = wDwellMax / 2
 		}
+		score += b.Dwell
 	}
 
 	if in.ETASlipHours > 0 {
 		// A two-day slip saturates the term; beyond that, more delay does not
 		// make the row more urgent than an active exception.
-		score += math.Min(in.ETASlipHours/48*wSlipMax, wSlipMax)
+		b.Slip = math.Min(in.ETASlipHours/48*wSlipMax, wSlipMax)
+		score += b.Slip
 	}
 
 	if in.StaleHours > 0 {
@@ -97,25 +127,29 @@ func Score(in Input) (int, string) {
 		// with no scan for three days is exactly on plan, and scoring it as
 		// risky teaches operators to ignore the column.
 		if ratio := in.StaleHours/threshold - 1; ratio > 0 {
-			score += math.Min(ratio*(wStaleMax/2), wStaleMax)
+			b.Stale = math.Min(ratio*(wStaleMax/2), wStaleMax)
+			score += b.Stale
 		}
 	}
 
-	score += math.Min(float64(in.CriticalAlerts)*wCriticalAlert, 2*wCriticalAlert)
-	score += math.Min(float64(in.InfoOrWarnAlerts)*wAlert, 4*wAlert)
+	b.Critical = math.Min(float64(in.CriticalAlerts)*wCriticalAlert, 2*wCriticalAlert)
+	b.Alerts = math.Min(float64(in.InfoOrWarnAlerts)*wAlert, 4*wAlert)
+	score += b.Critical + b.Alerts
 
-	if in.ValueAtRisk > 0 {
+	if in.ValueKnown && in.ValueAtRisk > 0 {
 		// Saturates at $10,000 of declared exposure.
-		score += math.Min(in.ValueAtRisk/10000*wValueMax, wValueMax)
+		b.Value = math.Min(in.ValueAtRisk/10000*wValueMax, wValueMax)
+		score += b.Value
 	}
 
 	if in.CustomerNotified {
-		score += notifiedRelief
+		b.Relief = notifiedRelief
+		score += b.Relief
 	}
 
 	// Delivered and cancelled shipments are not at risk, whatever else is true.
 	if in.Status == "delivered" || in.Status == "cancelled" {
-		return 0, "clear"
+		return 0, "clear", Breakdown{ValueKnown: in.ValueKnown}
 	}
 
 	if score < 0 {
@@ -125,7 +159,7 @@ func Score(in Input) (int, string) {
 		score = 100
 	}
 	rounded := int(score + 0.5)
-	return rounded, TierFor(rounded)
+	return rounded, TierFor(rounded), b
 }
 
 // TierFor maps a score to its display tier.
@@ -153,17 +187,19 @@ func Refresh(ctx context.Context, tx pgx.Tx, shipmentID uuid.UUID) error {
 		originalETA                                  *time.Time
 		lastEventAt                                  *time.Time
 		lastEventCode                                *string
+		declaredValue                                *float64
 	)
 	// Scan the shipment and its newest event in one statement.
 	err := tx.QueryRow(ctx, `
 		SELECT s.tracking_number, s.carrier, s.mode, s.origin, s.destination,
 		       s.status, s.is_public, s.created_at, s.shipped_at, s.delivered_at, s.eta,
+		       s.value_at_risk,
 		       (SELECT max(e.occurred_at) FROM shipment_events e WHERE e.shipment_id = s.id),
 		       (SELECT e.code FROM shipment_events e WHERE e.shipment_id = s.id
 		         ORDER BY e.occurred_at DESC LIMIT 1)
 		FROM shipments s WHERE s.id = $1`, shipmentID).
 		Scan(&tracking, &carrier, &mode, &origin, &dest, &status, &isPublic,
-			&createdAt, &shippedAt, &deliveredAt, &originalETA,
+			&createdAt, &shippedAt, &deliveredAt, &originalETA, &declaredValue,
 			&lastEventAt, &lastEventCode)
 	if err != nil {
 		return err
@@ -233,30 +269,41 @@ func Refresh(ctx context.Context, tx pgx.Tx, shipmentID uuid.UUID) error {
 		}
 	}
 	var valueAtRisk *float64
+	if declaredValue != nil && *declaredValue > 0 {
+		valueAtRisk = declaredValue
+		in.ValueAtRisk = *declaredValue
+		in.ValueKnown = true
+	}
 	var ratio *float64
 	if dwell != nil && expected != nil && *expected > 0 {
 		r := *dwell / *expected
 		ratio = &r
 	}
 
-	score, tier := Score(in)
+	score, tier, breakdown := Score(in)
 	etaSource, etaConfidence := etaProvenance(originalETA, lastEventAt, createdAt, mode)
+
+	breakdownRaw, err := json.Marshal(breakdown)
+	if err != nil {
+		return fmt.Errorf("marshal breakdown: %w", err)
+	}
 
 	_, err = tx.Exec(ctx, `
 		INSERT INTO shipment_current
 			(tenant_id, shipment_id, tracking_number, carrier, mode, origin, destination,
-			 status, is_public, risk_score, risk_tier, open_alerts, critical_alerts,
+			 status, is_public, risk_score, risk_tier, risk_breakdown, open_alerts, critical_alerts,
 			 last_event_at, last_event_code, stale_hours,
 			 eta, eta_source, eta_confidence, eta_slip_hours,
 			 dwell_hours, expected_dwell_hours, dwell_ratio,
 			 value_at_risk, customer_notified, shipped_at, delivered_at, updated_at)
 		VALUES ((SELECT tenant_id FROM shipments WHERE id=$1), $1, $2,$3,$4,$5,$6,
-		        $7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26, now())
+		        $7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27, now())
 		ON CONFLICT (shipment_id) DO UPDATE SET
 			tracking_number=EXCLUDED.tracking_number, carrier=EXCLUDED.carrier,
 			mode=EXCLUDED.mode, origin=EXCLUDED.origin, destination=EXCLUDED.destination,
 			status=EXCLUDED.status, is_public=EXCLUDED.is_public,
 			risk_score=EXCLUDED.risk_score, risk_tier=EXCLUDED.risk_tier,
+			risk_breakdown=EXCLUDED.risk_breakdown,
 			open_alerts=EXCLUDED.open_alerts, critical_alerts=EXCLUDED.critical_alerts,
 			last_event_at=EXCLUDED.last_event_at, last_event_code=EXCLUDED.last_event_code,
 			stale_hours=EXCLUDED.stale_hours, eta=EXCLUDED.eta,
@@ -268,10 +315,17 @@ func Refresh(ctx context.Context, tx pgx.Tx, shipmentID uuid.UUID) error {
 			shipped_at=EXCLUDED.shipped_at, delivered_at=EXCLUDED.delivered_at,
 			updated_at=now()`,
 		shipmentID, tracking, carrier, mode, origin, dest, status, isPublic,
-		score, tier, openAlerts, criticalAlerts,
+		score, tier, string(breakdownRaw), openAlerts, criticalAlerts,
 		lastEventAt, lastEventCode, staleHours,
 		originalETA, etaSource, etaConfidence, slip,
 		dwell, expected, ratio, valueAtRisk, notified, shippedAt, deliveredAt)
+	if err != nil {
+		return err
+	}
+
+	// The row is now current: clear the dirty flag set by writers. A refresh
+	// that fails leaves the flag set, so the next batch retries it.
+	_, err = tx.Exec(ctx, `UPDATE shipments SET needs_refresh=false WHERE id=$1`, shipmentID)
 	return err
 }
 

@@ -124,6 +124,25 @@ export interface Shipment {
   dwellRatio?: number
   lat?: number
   lng?: number
+  /**
+   * Per-term score explanation exactly as the server computed it. Render it;
+   * never recompute the weights client-side. Absent on rows predating the
+   * breakdown column — treat as "not yet computed", not as zero.
+   */
+  riskBreakdown?: RiskBreakdown
+}
+
+/** Mirrors readmodel.Breakdown. All values are points contributed, except
+ *  valueKnown (whether a cargo value was declared) and relief (negative). */
+export interface RiskBreakdown {
+  dwell: number
+  slip: number
+  stale: number
+  critical: number
+  alerts: number
+  value: number
+  valueKnown: boolean
+  relief: number
 }
 
 export interface ShipmentEvent {

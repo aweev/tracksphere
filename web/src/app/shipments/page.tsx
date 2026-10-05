@@ -6,8 +6,8 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { RequireAuth } from '@/components/RequireAuth';
 import { Card, Empty, RiskBadge, StatusPill } from '@/components/ui';
-import { RiskTooltip, type RiskBreakdown } from '@/components/RiskTooltip';
-import { api, type Shipment, type ShipmentStatus } from '@/lib/api';
+import { RiskTooltip } from '@/components/RiskTooltip';
+import { api, type RiskBreakdown, type Shipment, type ShipmentStatus } from '@/lib/api';
 import { CreateShipmentForm } from '@/components/CreateShipmentForm';
 
 const STATUSES: Array<ShipmentStatus | ''> = [
@@ -34,36 +34,19 @@ function loadViews(): SavedView[] {
   }
 }
 
-/**
- * Client-side mirror of the server's risk weights, used only to explain a score
- * in the tooltip. The server remains authoritative for the score itself.
- *
- * These weights duplicate internal/readmodel in a second language, which is a
- * known drift hazard: the Go constants are wDwellMax 35, wStaleMax 25,
- * wCriticalAlert 15, wAlert 3, wValueMax 15 with value saturating at 10,000.
- * Phase 1 removes this duplication by having Score() return the breakdown and
- * persisting it on shipment_current. Until then the arithmetic lives here once
- * rather than copy-pasted at every call site.
- */
-function riskBreakdown(s: Shipment): RiskBreakdown {
-  return {
-    dwell:
-      s.dwellHours && s.expectedDwellHours && s.dwellHours > s.expectedDwellHours
-        ? Math.round((s.dwellHours / s.expectedDwellHours - 1) * 35)
-        : 0,
-    stale: s.staleHours && s.expectedDwellHours
-      ? Math.round(Math.max(0, s.staleHours / (s.expectedDwellHours / 6) - 1) * 25)
-      : 0,
-    alerts:
-      (s.openAlerts ?? 0) > 0
-        ? (s.criticalAlerts ?? 0) * 15 + (s.openAlerts ?? 0) * 3
-        : 0,
-    valueAtRisk: s.valueAtRisk ? Math.min((s.valueAtRisk / 10000) * 15, 15) : 0,
-    customerNotified: s.customerNotified ?? false,
-    dwellRatio: s.dwellRatio,
-    staleThreshold: s.expectedDwellHours ? s.expectedDwellHours / 6 : 24,
-  };
-}
+/** Zero breakdown for rows the server has not scored yet (new shipments before
+ *  the first refresh pass). Renders as "no risk factors", which is correct: a
+ *  shipment with no events, no alerts and no declared value scores 0. */
+const EMPTY_BREAKDOWN: RiskBreakdown = {
+  dwell: 0,
+  slip: 0,
+  stale: 0,
+  critical: 0,
+  alerts: 0,
+  value: 0,
+  valueKnown: false,
+  relief: 0,
+};
 
 export default function ShipmentsPage() {
   return (
@@ -297,7 +280,7 @@ function ShipmentsBody() {
                     .map((s) => (
                       <tr key={s.id} className="hover:bg-slate-50">
                         <td className="py-3 pr-4">
-                          <RiskTooltip score={s.riskScore ?? 0} breakdown={riskBreakdown(s)}>
+                          <RiskTooltip score={s.riskScore ?? 0} breakdown={s.riskBreakdown ?? EMPTY_BREAKDOWN}>
                             <RiskBadge
                               tier={s.riskTier as 'critical' | 'at_risk' | 'watch' | 'clear' ?? 'clear'}
                               score={s.riskScore ?? 0}
@@ -363,7 +346,7 @@ function ShipmentsBody() {
                         </Link>
                         {s.reference && <div className="text-xs text-slate-400">{s.reference}</div>}
                       </div>
-<RiskTooltip score={s.riskScore ?? 0} breakdown={riskBreakdown(s)}>
+<RiskTooltip score={s.riskScore ?? 0} breakdown={s.riskBreakdown ?? EMPTY_BREAKDOWN}>
                         <RiskBadge
                           tier={s.riskTier as 'critical' | 'at_risk' | 'watch' | 'clear' ?? 'clear'}
                           score={s.riskScore ?? 0}

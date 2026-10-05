@@ -2,6 +2,7 @@ package shipments
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -36,7 +37,7 @@ const listSelect = `
 	SELECT s.id, s.tenant_id, s.tracking_number, s.reference, s.carrier, s.mode,
 	       s.origin, s.destination, s.status, s.eta, s.shipped_at, s.delivered_at,
 	       s.is_public, s.created_at, s.updated_at,
-	       c.risk_score, c.risk_tier, c.stale_hours, c.open_alerts, c.critical_alerts,
+	       c.risk_score, c.risk_tier, c.risk_breakdown, c.stale_hours, c.open_alerts, c.critical_alerts,
 	       c.eta_source, c.eta_confidence, c.value_at_risk, c.customer_notified,
 	       c.dwell_hours, c.expected_dwell_hours, c.dwell_ratio,
 	       (SELECT e.lat FROM shipment_events e
@@ -57,12 +58,13 @@ func scanListRow(rs pgx.Rows) (*model.Shipment, error) {
 	var openAlerts, criticalAlerts *int
 	var riskScore *int
 	var riskTier *string
+	var breakdown []byte
 	var staleHours, valueAtRisk *float64
 	var customerNotified *bool
 	if err := rs.Scan(&s.ID, &s.TenantID, &s.TrackingNumber, &s.Reference,
 		&s.Carrier, &s.Mode, &s.Origin, &s.Destination, &s.Status, &s.ETA,
 		&s.ShippedAt, &s.DeliveredAt, &s.IsPublic, &s.CreatedAt, &s.UpdatedAt,
-		&riskScore, &riskTier, &staleHours, &openAlerts, &criticalAlerts,
+		&riskScore, &riskTier, &breakdown, &staleHours, &openAlerts, &criticalAlerts,
 		&etaSource, &s.ETAConfidence, &valueAtRisk, &customerNotified,
 		&s.DwellHours, &s.ExpectedDwellHours, &s.DwellRatio,
 		&s.Lat, &s.Lng); err != nil {
@@ -74,6 +76,12 @@ func scanListRow(rs pgx.Rows) (*model.Shipment, error) {
 	s.RiskScore, s.RiskTier, s.StaleHours = riskScore, riskTier, staleHours
 	s.OpenAlerts, s.CriticalAlerts = openAlerts, criticalAlerts
 	s.ValueAtRisk, s.CustomerNotified = valueAtRisk, customerNotified
+	// Passthrough of exactly what Score() computed. '{}' (rows predating the
+	// column or never refreshed) decodes to a zero breakdown, which renders
+	// as "no risk factors" — honest for a row with no computed terms.
+	if len(breakdown) > 0 {
+		s.RiskBreakdown = append(json.RawMessage(nil), breakdown...)
+	}
 	return &s, nil
 }
 

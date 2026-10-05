@@ -1,20 +1,14 @@
 'use client';
 
 import { useState, type ReactNode } from 'react';
+import type { RiskBreakdown } from '@/lib/api';
 
-export interface RiskBreakdown {
-  dwell?: number;
-  stale?: number;
-  alerts?: number;
-  valueAtRisk?: number;
-  customerNotified?: boolean;
-  dwellRatio?: number;
-  staleThreshold?: number;
-}
+export type { RiskBreakdown };
 
 /**
  * Tooltip that explains the risk score breakdown.
- * Shows why a shipment has its risk tier.
+ * Renders exactly what the server computed — the breakdown prop is the
+ * persisted Score() output, not a client-side re-derivation.
  */
 export function RiskTooltip({
   children,
@@ -28,34 +22,48 @@ export function RiskTooltip({
   const [isOpen, setIsOpen] = useState(false);
 
   const items = [
-    breakdown.dwell && breakdown.dwell > 0 && (
+    breakdown.dwell > 0 && (
       <div key="dwell" className="flex justify-between text-xs">
         <span className="text-slate-600">Dwell over lane norm</span>
-        <span className="font-semibold text-orange-600">+{breakdown.dwell}</span>
+        <span className="font-semibold text-orange-600">+{Math.round(breakdown.dwell)}</span>
       </div>
     ),
-    breakdown.stale && breakdown.stale > 0 && breakdown.staleThreshold && (
+    breakdown.slip > 0 && (
+      <div key="slip" className="flex justify-between text-xs">
+        <span className="text-slate-600">ETA slipped</span>
+        <span className="font-semibold text-orange-600">+{Math.round(breakdown.slip)}</span>
+      </div>
+    ),
+    breakdown.stale > 0 && (
       <div key="stale" className="flex justify-between text-xs">
-        <span className="text-slate-600">Silent beyond threshold ({breakdown.staleThreshold}h)</span>
-        <span className="font-semibold text-red-600">+{breakdown.stale}</span>
+        <span className="text-slate-600">Carrier silence</span>
+        <span className="font-semibold text-red-600">+{Math.round(breakdown.stale)}</span>
       </div>
     ),
-    breakdown.alerts && breakdown.alerts > 0 && (
+    (breakdown.critical > 0 || breakdown.alerts > 0) && (
       <div key="alerts" className="flex justify-between text-xs">
         <span className="text-slate-600">Open alerts</span>
-        <span className="font-semibold text-amber-600">+{breakdown.alerts}</span>
+        <span className="font-semibold text-amber-600">
+          +{Math.round(breakdown.critical + breakdown.alerts)}
+        </span>
       </div>
     ),
-    breakdown.valueAtRisk && breakdown.valueAtRisk > 0 && (
-      <div key="value" className="flex justify-between text-xs">
-        <span className="text-slate-600">Value at risk</span>
-        <span className="font-semibold text-slate-600">+{breakdown.valueAtRisk}</span>
-      </div>
-    ),
-    breakdown.customerNotified && (
+    breakdown.valueKnown &&
+      (breakdown.value > 0 ? (
+        <div key="value" className="flex justify-between text-xs">
+          <span className="text-slate-600">Declared value at risk</span>
+          <span className="font-semibold text-slate-600">+{Math.round(breakdown.value)}</span>
+        </div>
+      ) : (
+        <div key="value" className="flex justify-between text-xs">
+          <span className="text-slate-600">Declared value</span>
+          <span className="text-slate-500">not provided</span>
+        </div>
+      )),
+    breakdown.relief !== 0 && (
       <div key="notified" className="flex justify-between text-xs">
         <span className="text-slate-600">Customer already notified</span>
-        <span className="font-semibold text-emerald-600">-10</span>
+        <span className="font-semibold text-emerald-600">{Math.round(breakdown.relief)}</span>
       </div>
     ),
   ].filter(Boolean);

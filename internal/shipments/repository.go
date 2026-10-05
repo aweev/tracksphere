@@ -37,13 +37,13 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 
 const shipmentCols = `id, tenant_id, tracking_number, reference, carrier, mode,
 	origin, destination, status, eta, shipped_at, delivered_at, is_public,
-	created_at, updated_at`
+	created_at, updated_at, value_at_risk`
 
 func scanShipment(row pgx.Row) (*model.Shipment, error) {
 	var s model.Shipment
 	err := row.Scan(&s.ID, &s.TenantID, &s.TrackingNumber, &s.Reference, &s.Carrier,
 		&s.Mode, &s.Origin, &s.Destination, &s.Status, &s.ETA, &s.ShippedAt,
-		&s.DeliveredAt, &s.IsPublic, &s.CreatedAt, &s.UpdatedAt)
+		&s.DeliveredAt, &s.IsPublic, &s.CreatedAt, &s.UpdatedAt, &s.ValueAtRisk)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -62,6 +62,10 @@ type CreateInput struct {
 	Origin         string
 	Destination    string
 	IsPublic       *bool
+	// Declared cargo value in the tenant's reporting currency. Nil means the
+	// forwarder did not supply one, which is distinct from zero and must never
+	// be imputed — see the ValueKnown contract on readmodel.Input.
+	ValueAtRisk *float64
 }
 
 // ErrInvalidInput marks validation failures surfaced as HTTP 400.
@@ -77,6 +81,9 @@ func (in CreateInput) Validate() error {
 	}
 	if strings.TrimSpace(in.Carrier) == "" {
 		return fmt.Errorf("%w: carrier is required", ErrInvalidInput)
+	}
+	if in.ValueAtRisk != nil && *in.ValueAtRisk < 0 {
+		return fmt.Errorf("%w: valueAtRisk cannot be negative", ErrInvalidInput)
 	}
 	return nil
 }
@@ -97,11 +104,12 @@ func (r *Repository) Create(ctx context.Context, tenantID, userID uuid.UUID, in 
 		row := tx.QueryRow(ctx, `
 			INSERT INTO shipments
 				(tenant_id, tracking_number, reference, carrier, mode,
-				 origin, destination, status, is_public, created_by)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,'booked',$8,$9)
+				 origin, destination, status, is_public, created_by, value_at_risk)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,'booked',$8,$9,$10)
 			RETURNING `+shipmentCols,
 			tenantID, strings.TrimSpace(in.TrackingNumber), in.Reference,
-			in.Carrier, in.Mode, in.Origin, in.Destination, isPublic, createdBy)
+			in.Carrier, in.Mode, in.Origin, in.Destination, isPublic, createdBy,
+			in.ValueAtRisk)
 		s, err := scanShipment(row)
 		if err != nil {
 			return err
@@ -135,15 +143,22 @@ func (r *Repository) Get(ctx context.Context, tenantID, id uuid.UUID) (*model.Sh
 type UpdateInput struct {
 	IsPublic *bool
 	Status   *string
+	// Nil leaves the stored value untouched; an explicit pointer (even to a
+	// small number) replaces it. There is no way to clear back to unknown via
+	// the API — unknown is the absence of data, not a state to return to.
+	ValueAtRisk *float64
 }
 
 // Validate checks UpdateInput against domain rules.
 func (in UpdateInput) Validate() error {
-	if in.IsPublic == nil && in.Status == nil {
-		return fmt.Errorf("%w: nothing to update (isPublic, status)", ErrInvalidInput)
+	if in.IsPublic == nil && in.Status == nil && in.ValueAtRisk == nil {
+		return fmt.Errorf("%w: nothing to update (isPublic, status, valueAtRisk)", ErrInvalidInput)
 	}
 	if in.Status != nil && !model.ValidStatus(*in.Status) {
 		return fmt.Errorf("%w: unknown status %q", ErrInvalidInput, *in.Status)
+	}
+	if in.ValueAtRisk != nil && *in.ValueAtRisk < 0 {
+		return fmt.Errorf("%w: valueAtRisk cannot be negative", ErrInvalidInput)
 	}
 	return nil
 }
@@ -164,9 +179,13 @@ func (r *Repository) Update(ctx context.Context, tenantID, id uuid.UUID, in Upda
 			args = append(args, *in.Status)
 			sets = append(sets, fmt.Sprintf("status=$%d", len(args)))
 		}
+		if in.ValueAtRisk != nil {
+			args = append(args, *in.ValueAtRisk)
+			sets = append(sets, fmt.Sprintf("value_at_risk=$%d", len(args)))
+		}
 		s, err := scanShipment(tx.QueryRow(ctx,
 			`UPDATE shipments SET `+strings.Join(sets, ", ")+
-				`, updated_at=now() WHERE id=$1 RETURNING `+shipmentCols,
+				`, updated_at=now(), needs_refresh=true WHERE id=$1 RETURNING `+shipmentCols,
 			args...))
 		if err != nil {
 			return err

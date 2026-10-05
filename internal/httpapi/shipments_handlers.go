@@ -19,6 +19,9 @@ type createShipmentRequest struct {
 	Origin         string `json:"origin"`
 	Destination    string `json:"destination"`
 	IsPublic       *bool  `json:"isPublic"`
+	// Declared cargo value. Omitted (null) means not provided, which is
+	// distinct from zero — see readmodel.Input.ValueKnown.
+	ValueAtRisk *float64 `json:"valueAtRisk"`
 }
 
 func chiParam(r *http.Request, name string) string {
@@ -38,6 +41,7 @@ func (s *Server) handleCreateShipment(w http.ResponseWriter, r *http.Request) {
 		Origin:         strings.TrimSpace(req.Origin),
 		Destination:    strings.TrimSpace(req.Destination),
 		IsPublic:       req.IsPublic,
+		ValueAtRisk:    req.ValueAtRisk,
 	}
 	if err := in.Validate(); err != nil {
 		s.domainError(w, err)
@@ -143,13 +147,16 @@ func (s *Server) handleUpdateShipment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		IsPublic *bool  `json:"isPublic"`
+		IsPublic *bool   `json:"isPublic"`
 		Status   *string `json:"status"`
+		// Omitted means leave the stored value untouched. There is deliberately
+		// no way to clear back to unknown via the API.
+		ValueAtRisk *float64 `json:"valueAtRisk"`
 	}
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	in := shipments.UpdateInput{IsPublic: req.IsPublic, Status: req.Status}
+	in := shipments.UpdateInput{IsPublic: req.IsPublic, Status: req.Status, ValueAtRisk: req.ValueAtRisk}
 	if err := in.Validate(); err != nil {
 		s.domainError(w, err)
 		return

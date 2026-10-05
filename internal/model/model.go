@@ -62,6 +62,12 @@ type Shipment struct {
 	RiskScore *int    `json:"riskScore,omitempty"`
 	RiskTier  *string `json:"riskTier,omitempty"`
 
+	// RiskBreakdown is the per-term explanation exactly as Score() computed it,
+	// passed through from shipment_current. Render it; never recompute the
+	// weights client-side. RawMessage (not a struct) so model does not import
+	// the readmodel package it would otherwise cycle with.
+	RiskBreakdown json.RawMessage `json:"riskBreakdown,omitempty"`
+
 	// StaleHours is how long the carrier has been silent. This is the exception
 	// nobody can report by eye and it produces no event at all.
 	StaleHours *float64 `json:"staleHours,omitempty"`

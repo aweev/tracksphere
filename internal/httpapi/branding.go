@@ -370,8 +370,13 @@ func (s *Server) handleConfirmSubscribe(w http.ResponseWriter, r *http.Request) 
 		if !found {
 			return nil
 		}
-		return s.consentAudit(r, tx, tenantID, &shipment, channel, recipient,
-			subjectHash(recipient), "confirmed", "", subjectHash(s.clientIP(r)))
+		if err := s.consentAudit(r, tx, tenantID, &shipment, channel, recipient,
+			subjectHash(recipient), "confirmed", "", subjectHash(s.clientIP(r))); err != nil {
+			return err
+		}
+		// Confirming flips customer_notified, which feeds the score's relief
+		// term. Flag the row so the next batch recomputes it.
+		return db.MarkShipmentDirty(r.Context(), tx, shipment)
 	})
 	if err != nil {
 		s.domainError(w, err)

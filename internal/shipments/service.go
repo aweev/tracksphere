@@ -165,7 +165,8 @@ func (s *Service) IngestEvent(ctx context.Context, carrier string, ev *model.Car
 					WHEN $5 THEN NULL
 					WHEN $2='delivered' AND $6 THEN $4
 					ELSE delivered_at END,
-				updated_at = CASE WHEN $7 THEN now() ELSE updated_at END
+				updated_at = CASE WHEN $7 THEN now() ELSE updated_at END,
+				needs_refresh=true
 			WHERE id=$1`,
 			shipmentID, newStatus, applyETA, ev.OccurredAt,
 			clearDelivered, !stale, stale)

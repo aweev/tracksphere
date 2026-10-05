@@ -267,6 +267,16 @@ func VerifyTenantCascade(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID) ([]
 	return remaining, nil
 }
 
+// MarkShipmentDirty flags a shipment for read-model refresh. Every path that
+// mutates a shipment's score inputs — carrier events, alert changes,
+// subscription changes, direct edits — must call this in the same transaction
+// as the mutation. RefreshBatch clears the flag on success, so a failed
+// refresh retries on the next pass instead of going silently stale.
+func MarkShipmentDirty(ctx context.Context, tx pgx.Tx, shipmentID uuid.UUID) error {
+	_, err := tx.Exec(ctx, `UPDATE shipments SET needs_refresh=true WHERE id=$1`, shipmentID)
+	return err
+}
+
 // calculateRecommendedPoolSize returns the recommended max connections based on
 // the application's concurrency requirements.
 // Formula: (API workers + worker pollers + background tasks) × safety factor
