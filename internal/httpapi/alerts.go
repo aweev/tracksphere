@@ -146,15 +146,18 @@ func (s *Server) listAlertsFiltered(ctx context.Context, tenantID uuid.UUID, sta
 		}
 		if cur != nil {
 			// Keyset: strictly after the cursor row in queue order. due_at
-			// NULLS LAST is expressed via COALESCE to a far-future instant so
-			// the comparison stays total; detected_at is newest-first.
+			// NULLS LAST is expressed via COALESCE to +infinity on BOTH
+			// sides: a NULL parameter (cursor row had no due date) must equal
+			// NULL row values, and comparing anything to a bare NULL yields
+			// NULL rather than true, which would end pagination early.
+			// detected_at is newest-first.
 			args = append(args, cur.Rank, cur.Due, cur.Detected, cur.ID)
 			n := len(args)
 			where = append(where, fmt.Sprintf(`(
 				a.severity_rank > $%d OR
-				(a.severity_rank = $%d AND COALESCE(a.due_at,'infinity'::timestamptz) > $%d) OR
-				(a.severity_rank = $%d AND COALESCE(a.due_at,'infinity'::timestamptz) = $%d AND a.detected_at < $%d) OR
-				(a.severity_rank = $%d AND COALESCE(a.due_at,'infinity'::timestamptz) = $%d AND a.detected_at = $%d AND a.id > $%d)
+				(a.severity_rank = $%d AND COALESCE(a.due_at,'infinity'::timestamptz) > COALESCE($%d,'infinity'::timestamptz)) OR
+				(a.severity_rank = $%d AND COALESCE(a.due_at,'infinity'::timestamptz) = COALESCE($%d,'infinity'::timestamptz) AND a.detected_at < $%d) OR
+				(a.severity_rank = $%d AND COALESCE(a.due_at,'infinity'::timestamptz) = COALESCE($%d,'infinity'::timestamptz) AND a.detected_at = $%d AND a.id > $%d)
 			)`, n-3, n-3, n-2, n-3, n-2, n-1, n-3, n-2, n-1, n))
 		}
 		if len(where) > 0 {
@@ -226,12 +229,15 @@ func (s *Server) listAlertsFiltered(ctx context.Context, tenantID uuid.UUID, sta
 		if err := rs.Err(); err != nil {
 			return err
 		}
-		for _, r := range rows {
-			if len(out) >= limit {
-				// The extra row exists: there is a next page, starting here.
+		for i, r := range rows {
+			if i >= limit {
+				// The extra row proves another page exists. Resume AFTER the
+				// last returned row (rows[limit-1]), not after this probe:
+				// encoding the probe would skip it forever.
+				prev := rows[i-1]
 				next = encodeAlertCursor(alertCursor{
-					Rank: r.rank, Due: r.due,
-					Detected: r.a.DetectedAt, ID: r.a.ID,
+					Rank: prev.rank, Due: prev.due,
+					Detected: prev.a.DetectedAt, ID: prev.a.ID,
 				})
 				break
 			}
