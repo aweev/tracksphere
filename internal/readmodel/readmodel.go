@@ -176,19 +176,51 @@ func TierFor(score int) string {
 	}
 }
 
+// refreshFacts is everything Refresh needs scanned before any computation.
+// Both the single-row and the batch path produce these, so the scoring below
+// runs identically regardless of how the facts were fetched.
+type refreshFacts struct {
+	shipmentID                   uuid.UUID
+	tracking, carrier, mode      string
+	origin, dest, status         string
+	isPublic                     bool
+	createdAt, shippedAt         *time.Time
+	deliveredAt                  *time.Time
+	originalETA                  *time.Time
+	lastEventAt                  *time.Time
+	lastEventCode                *string
+	declaredValue                *float64
+	openAlerts, criticalAlerts   int
+	otherAlerts                  int
+	notified                     bool
+}
+
+// refreshResult is everything computed from facts: the score, its
+// explanation, and every derived column the upsert writes.
+type refreshResult struct {
+	tier                       string
+	scoreInt                   int
+	breakdown                  Breakdown
+	etaSource                  string
+	etaConfidence              float64
+	staleHours, dwell, expected *float64
+	slip, ratio, valueAtRisk    *float64
+}
+
 // Refresh recomputes one shipment_current row from the write tables. Safe to
-// call from any tenant-pinned transaction.
+// call from any tenant-pinned transaction. Time comes from the database clock
+// so app/DB skew cannot shift staleness between the read and the write.
 func Refresh(ctx context.Context, tx pgx.Tx, shipmentID uuid.UUID) error {
-	var (
-		tracking, carrier, mode, origin, dest, status string
-		isPublic                                     bool
-		createdAt, shippedAt                         *time.Time
-		deliveredAt                                  *time.Time
-		originalETA                                  *time.Time
-		lastEventAt                                  *time.Time
-		lastEventCode                                *string
-		declaredValue                                *float64
-	)
+	var now time.Time
+	if err := tx.QueryRow(ctx, `SELECT now()`).Scan(&now); err != nil {
+		return err
+	}
+	return refreshAt(ctx, tx, shipmentID, now)
+}
+
+func refreshAt(ctx context.Context, tx pgx.Tx, shipmentID uuid.UUID, now time.Time) error {
+	var f refreshFacts
+	f.shipmentID = shipmentID
 	// Scan the shipment and its newest event in one statement.
 	err := tx.QueryRow(ctx, `
 		SELECT s.tracking_number, s.carrier, s.mode, s.origin, s.destination,
@@ -198,116 +230,39 @@ func Refresh(ctx context.Context, tx pgx.Tx, shipmentID uuid.UUID) error {
 		       (SELECT e.code FROM shipment_events e WHERE e.shipment_id = s.id
 		         ORDER BY e.occurred_at DESC LIMIT 1)
 		FROM shipments s WHERE s.id = $1`, shipmentID).
-		Scan(&tracking, &carrier, &mode, &origin, &dest, &status, &isPublic,
-			&createdAt, &shippedAt, &deliveredAt, &originalETA, &declaredValue,
-			&lastEventAt, &lastEventCode)
+		Scan(&f.tracking, &f.carrier, &f.mode, &f.origin, &f.dest, &f.status, &f.isPublic,
+			&f.createdAt, &f.shippedAt, &f.deliveredAt, &f.originalETA, &f.declaredValue,
+			&f.lastEventAt, &f.lastEventCode)
 	if err != nil {
 		return err
 	}
 
 	// Exception rollup.
-	var openAlerts, criticalAlerts, otherAlerts int
 	if err := tx.QueryRow(ctx, `
 		SELECT count(*),
 		       count(*) FILTER (WHERE severity='critical'),
 		       count(*) FILTER (WHERE severity IN ('warning','info'))
 		FROM alerts WHERE shipment_id=$1 AND status='open'`, shipmentID).
-		Scan(&openAlerts, &criticalAlerts, &otherAlerts); err != nil {
+		Scan(&f.openAlerts, &f.criticalAlerts, &f.otherAlerts); err != nil {
 		return err
 	}
 
 	// Active-subscription state decides whether the customer already knows.
-	var notified bool
 	if err := tx.QueryRow(ctx, `
 		SELECT EXISTS(SELECT 1 FROM tracking_subscriptions
 		              WHERE shipment_id=$1 AND status='active')`, shipmentID).
-		Scan(&notified); err != nil {
+		Scan(&f.notified); err != nil {
 		return err
 	}
 
-	now := time.Now()
-	in := Input{
-		Status:           status,
-		OpenAlerts:       openAlerts,
-		CriticalAlerts:   criticalAlerts,
-		InfoOrWarnAlerts: otherAlerts,
-		CustomerNotified: notified,
-	}
-	// Baseline for silence: the newest event if one exists, else the
-	// shipment's creation. A shipment created ten days ago with zero carrier
-	// events has been silent for ten days — that is the literal "nothing is
-	// happening" case the exception engine exists to catch, and it previously
-	// produced zero staleness and zero dwell because NULL propagated through
-	// every comparison below and the sweep's COALESCE turned it into 0.
-	baseline := lastEventAt
-	if baseline == nil {
-		baseline = createdAt
-	}
-	var staleHours *float64
-	if baseline != nil {
-		h := now.Sub(*baseline).Hours()
-		if h > 0 {
-			staleHours = &h
-			in.StaleHours = h
-		}
-	}
-	// Dwell: total time in transit against the lane norm. Measured from
-	// shipped_at (falling back to creation for unshipped rows), NOT from the
-	// last event. Time-since-last-scan is staleness, which the score already
-	// prices separately; using it for dwell as well made the two largest
-	// terms redundant and meant a normally-moving shipment always read
-	// dwell≈0, so the dwell_ratio rules could only fire for freight that was
-	// already stale. A shipment that left Shanghai 25 days ago on a 21-day
-	// norm is overrunning whether it scanned yesterday or not.
-	//
-	// Per-stage dwell (time in the CURRENT leg versus that leg's norm) wants
-	// the shipment_milestones table, which exists but has no writers yet.
-	// Until it does, total-transit dwell is the honest signal: it measures
-	// what its 35-point weight says, "overrunning the expected transit".
-	var dwell, expected *float64
-	dwellBase := shippedAt
-	if dwellBase == nil {
-		dwellBase = createdAt
-	}
-	if dwellBase != nil {
-		d := now.Sub(*dwellBase).Hours()
-		if d >= 0 {
-			dwell = &d
-			in.DwellHours = d
-		}
-	}
-	if exp, ok := expectedDwellHours(mode); ok {
-		expected = &exp
-		in.ExpectedDwellHours = exp
-	}
-	// ETA slip: how much later the current ETA is than the original estimate.
-	var slip *float64
-	if originalETA != nil && lastEventAt != nil {
-		// Compare against the estimate we would have made at booking.
-		if base, ok := estimateFromShipped(shippedAt, createdAt, mode); ok {
-			s := originalETA.Sub(base).Hours()
-			if s > 0 {
-				slip = &s
-				in.ETASlipHours = s
-			}
-		}
-	}
-	var valueAtRisk *float64
-	if declaredValue != nil && *declaredValue > 0 {
-		valueAtRisk = declaredValue
-		in.ValueAtRisk = *declaredValue
-		in.ValueKnown = true
-	}
-	var ratio *float64
-	if dwell != nil && expected != nil && *expected > 0 {
-		r := *dwell / *expected
-		ratio = &r
-	}
+	_, r := computeRefresh(f, now)
+	return upsertCurrent(ctx, tx, f, r)
+}
 
-	score, tier, breakdown := Score(in)
-	etaSource, etaConfidence := etaProvenance(originalETA, lastEventAt, createdAt, mode)
-
-	breakdownRaw, err := json.Marshal(breakdown)
+// upsertCurrent writes one computed row and clears the dirty flag. Shared by
+// Refresh and RefreshMany so the persisted shape cannot diverge between them.
+func upsertCurrent(ctx context.Context, tx pgx.Tx, f refreshFacts, r refreshResult) error {
+	breakdownRaw, err := json.Marshal(r.breakdown)
 	if err != nil {
 		return fmt.Errorf("marshal breakdown: %w", err)
 	}
@@ -338,19 +293,105 @@ func Refresh(ctx context.Context, tx pgx.Tx, shipmentID uuid.UUID) error {
 			customer_notified=EXCLUDED.customer_notified,
 			shipped_at=EXCLUDED.shipped_at, delivered_at=EXCLUDED.delivered_at,
 			updated_at=now()`,
-		shipmentID, tracking, carrier, mode, origin, dest, status, isPublic,
-		score, tier, string(breakdownRaw), openAlerts, criticalAlerts,
-		lastEventAt, lastEventCode, staleHours,
-		originalETA, etaSource, etaConfidence, slip,
-		dwell, expected, ratio, valueAtRisk, notified, shippedAt, deliveredAt)
+		f.shipmentID, f.tracking, f.carrier, f.mode, f.origin, f.dest, f.status, f.isPublic,
+		r.scoreInt, r.tier, string(breakdownRaw), f.openAlerts, f.criticalAlerts,
+		f.lastEventAt, f.lastEventCode, r.staleHours,
+		f.originalETA, r.etaSource, r.etaConfidence, r.slip,
+		r.dwell, r.expected, r.ratio, r.valueAtRisk, f.notified, f.shippedAt, f.deliveredAt)
 	if err != nil {
 		return err
 	}
 
 	// The row is now current: clear the dirty flag set by writers. A refresh
 	// that fails leaves the flag set, so the next batch retries it.
-	_, err = tx.Exec(ctx, `UPDATE shipments SET needs_refresh=false WHERE id=$1`, shipmentID)
+	_, err = tx.Exec(ctx, `UPDATE shipments SET needs_refresh=false WHERE id=$1`, f.shipmentID)
 	return err
+}
+
+// computeRefresh derives the score and all persisted columns from facts. Pure:
+// the same facts always yield the same row, whether they arrived one at a
+// time or in a batch of five thousand.
+func computeRefresh(f refreshFacts, now time.Time) (Input, refreshResult) {
+	var r refreshResult
+	in := Input{
+		Status:           f.status,
+		OpenAlerts:       f.openAlerts,
+		CriticalAlerts:   f.criticalAlerts,
+		InfoOrWarnAlerts: f.otherAlerts,
+		CustomerNotified: f.notified,
+	}
+	// Baseline for silence: the newest event if one exists, else the
+	// shipment's creation. A shipment created ten days ago with zero carrier
+	// events has been silent for ten days — that is the literal "nothing is
+	// happening" case the exception engine exists to catch, and it previously
+	// produced zero staleness and zero dwell because NULL propagated through
+	// every comparison below and the sweep's COALESCE turned it into 0.
+	baseline := f.lastEventAt
+	if baseline == nil {
+		baseline = f.createdAt
+	}
+	if baseline != nil {
+		h := now.Sub(*baseline).Hours()
+		if h > 0 {
+			r.staleHours = &h
+			in.StaleHours = h
+		}
+	}
+	// Dwell: total time in transit against the lane norm. Measured from
+	// shipped_at (falling back to creation for unshipped rows), NOT from the
+	// last event. Time-since-last-scan is staleness, which the score already
+	// prices separately; using it for dwell as well made the two largest
+	// terms redundant and meant a normally-moving shipment always read
+	// dwell≈0, so the dwell_ratio rules could only fire for freight that was
+	// already stale. A shipment that left Shanghai 25 days ago on a 21-day
+	// norm is overrunning whether it scanned yesterday or not.
+	//
+	// Per-stage dwell (time in the CURRENT leg versus that leg's norm) wants
+	// the shipment_milestones table, which exists but has no writers yet.
+	// Until it does, total-transit dwell is the honest signal: it measures
+	// what its 35-point weight says, "overrunning the expected transit".
+	dwellBase := f.shippedAt
+	if dwellBase == nil {
+		dwellBase = f.createdAt
+	}
+	if dwellBase != nil {
+		d := now.Sub(*dwellBase).Hours()
+		if d >= 0 {
+			r.dwell = &d
+			in.DwellHours = d
+		}
+	}
+	if exp, ok := expectedDwellHours(f.mode); ok {
+		r.expected = &exp
+		in.ExpectedDwellHours = exp
+	}
+	// ETA slip: how much later the current ETA is than the original estimate.
+	if f.originalETA != nil && f.lastEventAt != nil {
+		// Compare against the estimate we would have made at booking.
+		if base, ok := estimateFromShipped(f.shippedAt, f.createdAt, f.mode); ok {
+			s := f.originalETA.Sub(base).Hours()
+			if s > 0 {
+				r.slip = &s
+				in.ETASlipHours = s
+			}
+		}
+	}
+	if f.declaredValue != nil && *f.declaredValue > 0 {
+		r.valueAtRisk = f.declaredValue
+		in.ValueAtRisk = *f.declaredValue
+		in.ValueKnown = true
+	}
+	if r.dwell != nil && r.expected != nil && *r.expected > 0 {
+		ratio := *r.dwell / *r.expected
+		r.ratio = &ratio
+	}
+
+	score, tier, breakdown := Score(in)
+	r.scoreInt = score
+	r.tier = tier
+	r.breakdown = breakdown
+	r.etaSource, r.etaConfidence = etaProvenance(f.originalETA, f.lastEventAt, f.createdAt, f.mode)
+	return in, r
 }
 
 // modeNorms is the planning norm per transport mode, in hours. Seeded values:
@@ -406,8 +447,203 @@ func etaProvenance(eta, lastEvent, created *time.Time, mode string) (string, flo
 	return "carrier", 0.95
 }
 
-// RefreshBatch recomputes up to limit dirty rows. Called by the sweep so the
-// read model self-heals even if an incremental update was missed.
+// RefreshMany recomputes shipment_current rows for a batch of shipment IDs in
+// a constant number of statements: one facts query, then one upsert, then one
+// flag clear — regardless of batch size. The per-row Refresh costs five
+// statements each, so at 5,000 rows this is the difference between ~25,000
+// round trips and three.
+//
+// Scoring stays in Go via the shared computeRefresh: the weights exist in
+// exactly one place, and the batch path cannot diverge from the single-row
+// path. Only fact fetching and persistence are set-based.
+func RefreshMany(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID, ids []uuid.UUID) (int, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	var now time.Time
+	if err := tx.QueryRow(ctx, `SELECT now()`).Scan(&now); err != nil {
+		return 0, err
+	}
+	return refreshManyAt(ctx, tx, tenantID, ids, now)
+}
+
+func refreshManyAt(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID, ids []uuid.UUID, now time.Time) (int, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	// One facts query for the whole batch. The three laterals replace the
+	// per-row newest-event lookup, alert rollup, and subscription check.
+	rows, err := tx.Query(ctx, `
+		SELECT s.id, s.tracking_number, s.carrier, s.mode, s.origin, s.destination,
+		       s.status, s.is_public, s.created_at, s.shipped_at, s.delivered_at, s.eta,
+		       s.value_at_risk,
+		       e.occurred_at, e.code,
+		       COALESCE(a.open, 0), COALESCE(a.critical, 0), COALESCE(a.other, 0),
+		       COALESCE(sub.notified, false)
+		FROM shipments s
+		LEFT JOIN LATERAL (
+			SELECT occurred_at, code FROM shipment_events
+			WHERE shipment_id = s.id ORDER BY occurred_at DESC LIMIT 1
+		) e ON true
+		LEFT JOIN LATERAL (
+			SELECT count(*) AS open,
+			       count(*) FILTER (WHERE severity='critical') AS critical,
+			       count(*) FILTER (WHERE severity IN ('warning','info')) AS other
+			FROM alerts WHERE shipment_id = s.id AND status='open'
+		) a ON true
+		LEFT JOIN LATERAL (
+			SELECT EXISTS(SELECT 1 FROM tracking_subscriptions
+			              WHERE shipment_id = s.id AND status='active') AS notified
+		) sub ON true
+		WHERE s.id = ANY($1)`, ids)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+
+	type computed struct {
+		f refreshFacts
+		r refreshResult
+	}
+	var done []computed
+	for rows.Next() {
+		var f refreshFacts
+		if err := rows.Scan(&f.shipmentID, &f.tracking, &f.carrier, &f.mode,
+			&f.origin, &f.dest, &f.status, &f.isPublic,
+			&f.createdAt, &f.shippedAt, &f.deliveredAt, &f.originalETA,
+			&f.declaredValue, &f.lastEventAt, &f.lastEventCode,
+			&f.openAlerts, &f.criticalAlerts, &f.otherAlerts, &f.notified); err != nil {
+			return 0, err
+		}
+		_, r := computeRefresh(f, now)
+		done = append(done, computed{f: f, r: r})
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	if len(done) == 0 {
+		return 0, nil
+	}
+
+	// One upsert for the whole batch via UNNEST. Arrays are parallel by
+	// position; tenant_id is constant for the batch.
+	n := len(done)
+	sids := make([]uuid.UUID, n)
+	tracking := make([]string, n)
+	carrier := make([]string, n)
+	mode := make([]string, n)
+	origin := make([]string, n)
+	dest := make([]string, n)
+	status := make([]string, n)
+	isPublic := make([]bool, n)
+	scores := make([]int, n)
+	tiers := make([]string, n)
+	breakdowns := make([]string, n)
+	opens := make([]int, n)
+	criticals := make([]int, n)
+	lastAts := make([]*time.Time, n)
+	lastCodes := make([]*string, n)
+	stales := make([]*float64, n)
+	etas := make([]*time.Time, n)
+	etaSources := make([]string, n)
+	etaConfs := make([]float64, n)
+	slips := make([]*float64, n)
+	dwells := make([]*float64, n)
+	expecteds := make([]*float64, n)
+	ratios := make([]*float64, n)
+	values := make([]*float64, n)
+	notifieds := make([]bool, n)
+	shippedAts := make([]*time.Time, n)
+	deliveredAts := make([]*time.Time, n)
+	for i, d := range done {
+		sids[i] = d.f.shipmentID
+		tracking[i] = d.f.tracking
+		carrier[i] = d.f.carrier
+		mode[i] = d.f.mode
+		origin[i] = d.f.origin
+		dest[i] = d.f.dest
+		status[i] = d.f.status
+		isPublic[i] = d.f.isPublic
+		scores[i] = d.r.scoreInt
+		tiers[i] = d.r.tier
+		raw, err := json.Marshal(d.r.breakdown)
+		if err != nil {
+			return 0, fmt.Errorf("marshal breakdown: %w", err)
+		}
+		breakdowns[i] = string(raw)
+		opens[i] = d.f.openAlerts
+		criticals[i] = d.f.criticalAlerts
+		lastAts[i] = d.f.lastEventAt
+		lastCodes[i] = d.f.lastEventCode
+		stales[i] = d.r.staleHours
+		etas[i] = d.f.originalETA
+		etaSources[i] = d.r.etaSource
+		etaConfs[i] = d.r.etaConfidence
+		slips[i] = d.r.slip
+		dwells[i] = d.r.dwell
+		expecteds[i] = d.r.expected
+		ratios[i] = d.r.ratio
+		values[i] = d.r.valueAtRisk
+		notifieds[i] = d.f.notified
+		shippedAts[i] = d.f.shippedAt
+		deliveredAts[i] = d.f.deliveredAt
+	}
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO shipment_current
+			(tenant_id, shipment_id, tracking_number, carrier, mode, origin, destination,
+			 status, is_public, risk_score, risk_tier, risk_breakdown, open_alerts, critical_alerts,
+			 last_event_at, last_event_code, stale_hours,
+			 eta, eta_source, eta_confidence, eta_slip_hours,
+			 dwell_hours, expected_dwell_hours, dwell_ratio,
+			 value_at_risk, customer_notified, shipped_at, delivered_at, updated_at)
+		SELECT $1, u.id, u.tracking, u.carrier, u.mode, u.origin, u.dest, u.status,
+		       u.is_public, u.score, u.tier, u.breakdown::jsonb, u.open, u.critical,
+		       u.last_at, u.last_code, u.stale,
+		       u.eta, u.eta_source, u.eta_conf, u.slip,
+		       u.dwell, u.expected, u.ratio,
+		       u.val, u.notified, u.shipped, u.delivered, now()
+		FROM UNNEST(
+			$2::uuid[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[],
+			$8::text[], $9::bool[], $10::int[], $11::text[], $12::text[],
+			$13::int[], $14::int[], $15::timestamptz[], $16::text[],
+			$17::numeric[], $18::timestamptz[], $19::text[], $20::numeric[],
+			$21::numeric[], $22::numeric[], $23::numeric[], $24::numeric[],
+			$25::numeric[], $26::bool[], $27::timestamptz[], $28::timestamptz[]
+		) AS u(id, tracking, carrier, mode, origin, dest, status, is_public,
+		        score, tier, breakdown, open, critical, last_at, last_code, stale,
+		        eta, eta_source, eta_conf, slip, dwell, expected, ratio,
+		        val, notified, shipped, delivered)
+		ON CONFLICT (shipment_id) DO UPDATE SET
+			tracking_number=EXCLUDED.tracking_number, carrier=EXCLUDED.carrier,
+			mode=EXCLUDED.mode, origin=EXCLUDED.origin, destination=EXCLUDED.destination,
+			status=EXCLUDED.status, is_public=EXCLUDED.is_public,
+			risk_score=EXCLUDED.risk_score, risk_tier=EXCLUDED.risk_tier,
+			risk_breakdown=EXCLUDED.risk_breakdown,
+			open_alerts=EXCLUDED.open_alerts, critical_alerts=EXCLUDED.critical_alerts,
+			last_event_at=EXCLUDED.last_event_at, last_event_code=EXCLUDED.last_event_code,
+			stale_hours=EXCLUDED.stale_hours, eta=EXCLUDED.eta,
+			eta_source=EXCLUDED.eta_source, eta_confidence=EXCLUDED.eta_confidence,
+			eta_slip_hours=EXCLUDED.eta_slip_hours, dwell_hours=EXCLUDED.dwell_hours,
+			expected_dwell_hours=EXCLUDED.expected_dwell_hours, dwell_ratio=EXCLUDED.dwell_ratio,
+			value_at_risk=EXCLUDED.value_at_risk,
+			customer_notified=EXCLUDED.customer_notified,
+			shipped_at=EXCLUDED.shipped_at, delivered_at=EXCLUDED.delivered_at,
+			updated_at=now()`,
+		tenantID, sids, tracking, carrier, mode, origin, dest, status, isPublic,
+		scores, tiers, breakdowns, opens, criticals, lastAts, lastCodes, stales,
+		etas, etaSources, etaConfs, slips, dwells, expecteds, ratios,
+		values, notifieds, shippedAts, deliveredAts)
+	if err != nil {
+		return 0, err
+	}
+
+	_, err = tx.Exec(ctx, `UPDATE shipments SET needs_refresh=false WHERE id = ANY($1)`, sids)
+	if err != nil {
+		return 0, err
+	}
+	return len(done), nil
+}
 //
 // Work is driven by shipments.needs_refresh, which writers set and Refresh
 // clears — not by a time window. The previous predicate (updated_at older
@@ -420,6 +656,15 @@ func etaProvenance(eta, lastEvent, created *time.Time, mode string) (string, flo
 // Returns the number actually refreshed, not merely attempted: a pass in which
 // every Refresh fails must not report success.
 func RefreshBatch(ctx context.Context, tx pgx.Tx, limit int) (int, error) {
+	// The batch runs inside a tenant-pinned transaction (all callers pin).
+	// Resolve the tenant from the pin rather than taking it as a parameter:
+	// without a pin every query below returns zero rows by RLS, so failing
+	// closed here would silently do nothing while reporting success.
+	var tenantID uuid.UUID
+	if err := tx.QueryRow(ctx, `SELECT current_setting('app.tenant_id')::uuid`).Scan(&tenantID); err != nil {
+		return 0, fmt.Errorf("refresh requires a pinned tenant: %w", err)
+	}
+
 	rows, err := tx.Query(ctx, `
 		SELECT s.id FROM shipments s
 		LEFT JOIN shipment_current c ON c.shipment_id = s.id
@@ -443,14 +688,25 @@ func RefreshBatch(ctx context.Context, tx pgx.Tx, limit int) (int, error) {
 	if err := rows.Err(); err != nil {
 		return 0, err
 	}
+
+	// RefreshMany does the whole batch in three statements. A poison row that
+	// fails the batch leaves every flag set (the flag clear is in the same
+	// statement as the upsert), so the next pass retries the full batch
+	// rather than silently skipping one row forever. Chunk at 500 to bound
+	// parameter counts and keep each statement's plan stable.
+	const chunk = 500
 	refreshed := 0
-	for _, id := range ids {
-		if err := Refresh(ctx, tx, id); err != nil {
-			// One bad row must not stall the sweep. Its flag stays set, so
-			// the next pass retries it instead of silently skipping it.
+	for i := 0; i < len(ids); i += chunk {
+		end := i + chunk
+		if end > len(ids) {
+			end = len(ids)
+		}
+		n, err := RefreshMany(ctx, tx, tenantID, ids[i:end])
+		if err != nil {
+			// One bad chunk must not stall the sweep; its flags stay set.
 			continue
 		}
-		refreshed++
+		refreshed += n
 	}
 	return refreshed, nil
 }

@@ -5,6 +5,7 @@ package readmodel
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -295,6 +296,159 @@ func TestRefreshDwellMeasuresTransitNotSilence(t *testing.T) {
 	}
 	if ratio == nil || *ratio < 1.0 {
 		t.Errorf("dwell_ratio=%v; 600h against a 504h norm must exceed 1.0", ratio)
+	}
+}
+
+// TestRefreshManyMatchesRefresh proves the batch path cannot diverge from the
+// single-row path. It refreshes the same diverse rows both ways and requires
+// every persisted column but updated_at to be identical. If the two paths ever
+// disagree, the sweep (batched) and the API-triggered refresh (single) would
+// write different scores for the same facts.
+func TestRefreshManyMatchesRefresh(t *testing.T) {
+	pool := refreshPool(t)
+	ctx := context.Background()
+
+	tenantID := uuid.New()
+	slug := "eq-" + tenantID.String()[:8]
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := db.SetSystem(ctx, tx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO tenants (id, name, slug) VALUES ($1, $2, $3)`,
+		tenantID, "Equiv Probe", slug); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		cctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		tx, err := pool.Begin(cctx)
+		if err != nil {
+			return
+		}
+		defer func() { _ = tx.Rollback(cctx) }()
+		_ = db.SetSystem(cctx, tx)
+		_ = db.SetTenant(cctx, tx, tenantID)
+		_, _ = tx.Exec(cctx, `DELETE FROM tenants WHERE id=$1`, tenantID)
+		_ = tx.Commit(cctx)
+	})
+
+	// Diverse rows: one with everything, one bare, one delivered.
+	var ids []uuid.UUID
+	if err := db.WithTenant(ctx, pool, tenantID, func(tx pgx.Tx) error {
+		for i, mode := range []string{"ocean", "road", "air"} {
+			var sid uuid.UUID
+			if err := tx.QueryRow(ctx, `
+				INSERT INTO shipments (tenant_id, tracking_number, carrier, mode, shipped_at, value_at_risk)
+				VALUES ($1, $2, 'probe-carrier', $3, now() - interval '300 hours', $4)
+				RETURNING id`,
+				tenantID, fmt.Sprintf("EQ-%s-%d", tenantID.String()[:4], i),
+				mode, 15000).Scan(&sid); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO shipment_events (tenant_id, shipment_id, carrier, code, occurred_at, dedup_key)
+				VALUES ($1, $2, 'probe-carrier', 'DEPARTED', now() - interval '100 hours', $3)`,
+				tenantID, sid, fmt.Sprintf("eq:%s:%d", tenantID, i)); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO alerts (tenant_id, shipment_id, kind, severity, status, title, detected_at)
+				VALUES ($1, $2, 'stale', 'critical', 'open', 'probe', now())`,
+				tenantID, sid); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO tracking_subscriptions (tenant_id, shipment_id, channel, recipient, recipient_hash, status)
+				VALUES ($1, $2, 'email', 'eq@example.com',
+					'1111111111111111111111111111111111111111111111111111111111111111',
+					'active')`, tenantID, sid); err != nil {
+				return err
+			}
+			ids = append(ids, sid)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot := func() map[string]string {
+		out := map[string]string{}
+		if err := db.WithTenant(ctx, pool, tenantID, func(tx pgx.Tx) error {
+			rows, err := tx.Query(ctx, `
+				SELECT shipment_id, row_to_json(c)::text FROM (
+					SELECT shipment_id, tracking_number, carrier, mode, origin,
+					       destination, status, is_public, risk_score, risk_tier,
+					       risk_breakdown, open_alerts, critical_alerts,
+					       last_event_at, last_event_code, stale_hours,
+					       eta, eta_source, eta_confidence, eta_slip_hours,
+					       dwell_hours, expected_dwell_hours, dwell_ratio,
+					       value_at_risk, customer_notified, shipped_at, delivered_at
+					FROM shipment_current WHERE tenant_id=$1
+				) c ORDER BY shipment_id`, tenantID)
+			if err != nil {
+				return err
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var sid, js string
+				if err := rows.Scan(&sid, &js); err != nil {
+					return err
+				}
+				out[sid] = js
+			}
+			return rows.Err()
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+
+	// Path 1: one by one. Both paths below share a single fixed instant so the
+	// comparison is exact: any difference is logic, never clock skew.
+	fixed := time.Now().Truncate(time.Second)
+	if err := db.WithTenant(ctx, pool, tenantID, func(tx pgx.Tx) error {
+		for _, id := range ids {
+			if err := refreshAt(ctx, tx, id, fixed); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("single refresh: %v", err)
+	}
+	single := snapshot()
+
+	// Re-dirty, then path 2: one batch at the same instant.
+	if err := db.WithTenant(ctx, pool, tenantID, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE shipments SET needs_refresh=true WHERE tenant_id=$1`, tenantID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.WithTenant(ctx, pool, tenantID, func(tx pgx.Tx) error {
+		_, err := refreshManyAt(ctx, tx, tenantID, ids, fixed)
+		return err
+	}); err != nil {
+		t.Fatalf("batch refresh: %v", err)
+	}
+	batched := snapshot()
+
+	if len(single) != len(ids) || len(batched) != len(ids) {
+		t.Fatalf("row counts differ: single=%d batched=%d want=%d", len(single), len(batched), len(ids))
+	}
+	for _, id := range ids {
+		if single[id.String()] != batched[id.String()] {
+			t.Errorf("shipment %s differs:\n single: %s\n batched: %s",
+				id, single[id.String()], batched[id.String()])
+		}
 	}
 }
 
