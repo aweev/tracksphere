@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/tracksphere/tracksphere/internal/db"
+	"github.com/tracksphere/tracksphere/internal/intel"
 	"github.com/tracksphere/tracksphere/internal/model"
 	"github.com/tracksphere/tracksphere/internal/queue"
 )
@@ -172,6 +173,21 @@ func (s *Service) IngestEvent(ctx context.Context, carrier string, ev *model.Car
 			clearDelivered, !stale, stale)
 		if err != nil {
 			return err
+		}
+
+		// Fresh delivery: refresh the lane's learned percentiles now, on the
+		// cold path (once per shipment lifetime), so the hot ETA path reads
+		// one pre-aggregated row instead of scanning the lane.
+		if cur.Status != "delivered" && newStatus == "delivered" {
+			var origin, dest, mode string
+			if err := tx.QueryRow(ctx, `
+				SELECT origin, destination, mode FROM shipments WHERE id=$1`,
+				shipmentID).Scan(&origin, &dest, &mode); err != nil {
+				return err
+			}
+			if err := intel.RefreshLaneStats(ctx, tx, tenantID, origin, dest, carrier, mode); err != nil {
+				return err
+			}
 		}
 
 		// 4. Outbox: same transaction as the data.
