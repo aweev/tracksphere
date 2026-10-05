@@ -251,14 +251,26 @@ func Refresh(ctx context.Context, tx pgx.Tx, shipmentID uuid.UUID) error {
 			in.StaleHours = h
 		}
 	}
-	// Dwell: how long since the last event, against the lane norm. Using the
-	// last event (not created_at) is what makes "arrived 6 days ago and nothing
-	// since" measurable, which is the whole point. When no event exists yet,
-	// the baseline above (creation) applies, so a shipment that has never been
-	// scanned still accrues dwell against its norm.
+	// Dwell: total time in transit against the lane norm. Measured from
+	// shipped_at (falling back to creation for unshipped rows), NOT from the
+	// last event. Time-since-last-scan is staleness, which the score already
+	// prices separately; using it for dwell as well made the two largest
+	// terms redundant and meant a normally-moving shipment always read
+	// dwell≈0, so the dwell_ratio rules could only fire for freight that was
+	// already stale. A shipment that left Shanghai 25 days ago on a 21-day
+	// norm is overrunning whether it scanned yesterday or not.
+	//
+	// Per-stage dwell (time in the CURRENT leg versus that leg's norm) wants
+	// the shipment_milestones table, which exists but has no writers yet.
+	// Until it does, total-transit dwell is the honest signal: it measures
+	// what its 35-point weight says, "overrunning the expected transit".
 	var dwell, expected *float64
-	if baseline != nil {
-		d := now.Sub(*baseline).Hours()
+	dwellBase := shippedAt
+	if dwellBase == nil {
+		dwellBase = createdAt
+	}
+	if dwellBase != nil {
+		d := now.Sub(*dwellBase).Hours()
 		if d >= 0 {
 			dwell = &d
 			in.DwellHours = d

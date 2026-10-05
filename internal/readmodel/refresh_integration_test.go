@@ -214,6 +214,90 @@ func TestRefreshDetectsSilentShipment(t *testing.T) {
 	}
 }
 
+// TestRefreshDwellMeasuresTransitNotSilence proves dwell is total time in
+// transit, not time since the last scan. A shipment that left 25 days ago on
+// a 21-day ocean norm is overrunning even though it scanned yesterday; under
+// the old time-since-last-event definition it read dwell≈24h and the
+// dwell_ratio rules could never fire for moving freight.
+func TestRefreshDwellMeasuresTransitNotSilence(t *testing.T) {
+	pool := refreshPool(t)
+	ctx := context.Background()
+
+	tenantID := uuid.New()
+	slug := "dw-" + tenantID.String()[:8]
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := db.SetSystem(ctx, tx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO tenants (id, name, slug) VALUES ($1, $2, $3)`,
+		tenantID, "Dwell Probe", slug); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		cctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		tx, err := pool.Begin(cctx)
+		if err != nil {
+			return
+		}
+		defer func() { _ = tx.Rollback(cctx) }()
+		_ = db.SetSystem(cctx, tx)
+		_ = db.SetTenant(cctx, tx, tenantID)
+		_, _ = tx.Exec(cctx, `DELETE FROM tenants WHERE id=$1`, tenantID)
+		_ = tx.Commit(cctx)
+	})
+
+	var shipmentID uuid.UUID
+	if err := db.WithTenant(ctx, pool, tenantID, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `
+			INSERT INTO shipments (tenant_id, tracking_number, carrier, mode, shipped_at)
+			VALUES ($1, $2, 'probe-carrier', 'ocean', now() - interval '600 hours')
+			RETURNING id`, tenantID, "DW-"+tenantID.String()[:8]).Scan(&shipmentID); err != nil {
+			return err
+		}
+		// A scan yesterday: recent activity on an overrunning transit.
+		_, err := tx.Exec(ctx, `
+			INSERT INTO shipment_events
+				(tenant_id, shipment_id, carrier, code, occurred_at, dedup_key)
+			VALUES ($1, $2, 'probe-carrier', 'DEPARTED', now() - interval '24 hours', $3)`,
+			tenantID, shipmentID, "dwell:"+tenantID.String())
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := db.WithTenant(ctx, pool, tenantID, func(tx pgx.Tx) error {
+		return Refresh(ctx, tx, shipmentID)
+	}); err != nil {
+		t.Fatalf("Refresh failed: %v", err)
+	}
+
+	var dwell, expected *float64
+	var ratio *float64
+	if err := db.WithTenant(ctx, pool, tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `
+			SELECT dwell_hours, expected_dwell_hours, dwell_ratio
+			FROM shipment_current WHERE shipment_id=$1`,
+			shipmentID).Scan(&dwell, &expected, &ratio)
+	}); err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if dwell == nil || *dwell < 500 {
+		t.Errorf("dwell_hours=%v; 25 days in transit must read ~600h, not ~24h since last scan", dwell)
+	}
+	if ratio == nil || *ratio < 1.0 {
+		t.Errorf("dwell_ratio=%v; 600h against a 504h norm must exceed 1.0", ratio)
+	}
+}
+
 // TestRefreshPersistsBreakdown seeds a shipment with a declared value, runs
 // Refresh, and requires the persisted breakdown to carry that value with
 // valueKnown=true — and the dirty flag to be cleared. Before the breakdown
