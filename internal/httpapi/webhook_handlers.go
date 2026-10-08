@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -52,6 +53,22 @@ func (s *Server) handleCarrierWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Flood guard: audit-before-verify means anyone can mint inbox rows, so
+	// the inbox needs a per-carrier hourly cap on top of the per-IP rate
+	// limit. Served by webhook_inbox_carrier_hour_idx (000027).
+	if cap := s.cfg.WebhookFloodPerHour; cap > 0 {
+		var recent int64
+		if err := s.pool.QueryRow(r.Context(),
+			`SELECT count(*) FROM webhook_inbox
+			  WHERE carrier=$1 AND received_at > now() - interval '1 hour'`,
+			carrier).Scan(&recent); err == nil && recent >= int64(cap) {
+			metrics.WebhookReceivedTotal.WithLabelValues(carrier, "flood").Inc()
+			w.Header().Set("Retry-After", "300")
+			writeError(w, http.StatusTooManyRequests, "rate_limited", "Carrier flood guard tripped, retry shortly")
+			return
+		}
+	}
+
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "bad_body", "Could not read body")
@@ -80,6 +97,22 @@ func (s *Server) handleCarrierWebhook(w http.ResponseWriter, r *http.Request) {
 		metrics.WebhookReceivedTotal.WithLabelValues(carrier, "invalid_signature").Inc()
 		writeError(w, http.StatusUnauthorized, "bad_signature", "Signature verification failed")
 		return
+	}
+
+	// Optional replay window (H5): checked only after the signature passed,
+	// so the timestamp narrows freshness for authenticated deliveries instead
+	// of authenticating anything itself (the HMAC covers the body only).
+	// Carriers that send X-TrackSphere-Timestamp (unix seconds) get ±5min
+	// enforcement; absent header = legacy path where dedup keeps replays
+	// idempotent and the flood guard bounds them. Same error code as a bad
+	// signature so the header is not an oracle.
+	if tsRaw := strings.TrimSpace(r.Header.Get("X-TrackSphere-Timestamp")); tsRaw != "" {
+		ts, err := strconv.ParseInt(tsRaw, 10, 64)
+		if err != nil || time.Since(time.Unix(ts, 0)).Abs() > 5*time.Minute {
+			metrics.WebhookReceivedTotal.WithLabelValues(carrier, "stale_timestamp").Inc()
+			writeError(w, http.StatusUnauthorized, "bad_signature", "Signature verification failed")
+			return
+		}
 	}
 
 	ev, err := model.DecodeCarrierEvent(body)

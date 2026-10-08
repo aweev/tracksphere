@@ -202,6 +202,15 @@ func (s *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 			return errSubscribeCap
 		}
 
+		// Metered kill-switch (P2-4): fail honestly instead of recording a
+		// subscription that can never deliver. notify.ChannelAllowed is the
+		// same policy the worker send paths enforce.
+		if meteredChannels[channel] && !notify.ChannelAllowed(r.Context(), tx, tenantID, channel) {
+			s.consentAudit(r, tx, tenantID, &ship.ID, channel, recipient, rhash,
+				"suppressed", "metered_disabled", ipHash)
+			return errSubscribeDisabled
+		}
+
 		// Email is trusted enough to activate immediately: proving control of
 		// an inbox the customer typed into is itself the consent signal, and
 		// email is unmetered so the abuse cost is low. SMS/WhatsApp are metered
@@ -278,6 +287,12 @@ func (s *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusGone, "subscribe_revoked",
 				"Updates for this address were previously declined")
 			return
+		case errors.Is(err, errSubscribeDisabled):
+			// 409, not 400: the request is well-formed, the operator has the
+			// channel switched off. The portal offers email instead.
+			writeError(w, http.StatusConflict, "channel_disabled",
+				"Updates over this channel are not enabled by the operator — choose email")
+			return
 		default:
 			s.domainError(w, err)
 			return
@@ -304,8 +319,9 @@ func confirmMessage(status string) string {
 }
 
 var (
-	errSubscribeCap     = errors.New("subscription cap reached")
-	errSubscribeRevoked = errors.New("previously revoked")
+	errSubscribeCap      = errors.New("subscription cap reached")
+	errSubscribeRevoked  = errors.New("previously revoked")
+	errSubscribeDisabled = errors.New("metered channel disabled by operator")
 )
 
 // handleConfirmSubscribe GET /api/v1/subscribe/confirm?token=...

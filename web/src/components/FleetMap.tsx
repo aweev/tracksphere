@@ -17,7 +17,9 @@ import type { Shipment } from '@/lib/api';
  * what is wrong" is the question, and a shipment 20% over its transit looks
  * identical to one on plan if both are `in_transit`. Risk tier is the answer.
  *
- * Markers are clustered so a dense region does not become an unreadable pile.
+ * Markers are individual (no clustering yet): past ~200 points this becomes
+ * a pile — the dashboard caps the query at 250 and a cluster layer is the
+ * next step when a tenant outgrows it.
  */
 const TIER_COLORS: Record<string, string> = {
   clear: '#10b981',
@@ -42,14 +44,24 @@ export default function FleetMap({ shipments }: { shipments: Shipment[] }) {
       style: {
         version: 8,
         sources: {
-          osm: {
+          // CARTO light basemap (free with attribution, no key): OSM's
+          // tile.openstreetmap.org usage policy blocks production traffic,
+          // so ship CARTO by default. Tile URL override via
+          // NEXT_PUBLIC_TILE_URL / NEXT_PUBLIC_TILE_ATTRIBUTION for
+          // self-hosted or commercial tiles.
+          carto: {
             type: 'raster',
-            tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+            tiles: [
+              process.env.NEXT_PUBLIC_TILE_URL ??
+                'https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png',
+            ],
             tileSize: 256,
-            attribution: '© OpenStreetMap contributors',
+            attribution:
+              process.env.NEXT_PUBLIC_TILE_ATTRIBUTION ??
+              '© OpenStreetMap contributors © CARTO',
           },
         },
-        layers: [{ id: 'osm', type: 'raster', source: 'osm' }],
+        layers: [{ id: 'carto', type: 'raster', source: 'carto' }],
       },
       // Atlantic-centred: the lanes this product serves run between West
       // Africa and Europe.
@@ -96,12 +108,19 @@ export default function FleetMap({ shipments }: { shipments: Shipment[] }) {
       bounds.extend([s.lng as number, s.lat as number]);
     }
 
-    if (placed.length > 1 && !map.getBounds()) {
-      const pad = { top: 40, bottom: 40, left: 48, right: 48 };
-      // Reduced motion: no fly. The camera still has to frame the fleet, so this
-      // is a jump rather than a flight, not a skipped fit.
-      if (reduced) map.jumpTo({ center: bounds.getCenter(), zoom: 2 });
-      else map.fitBounds(bounds, { padding: pad, maxZoom: 6, duration: 600 });
+    if (placed.length > 0) {
+      try {
+        const pad = { top: 40, bottom: 40, left: 48, right: 48 };
+        // Reduced motion: no fly. The camera still has to frame the fleet, so this
+        // is a jump rather than a flight, not a skipped fit.
+        if (placed.length === 1) {
+          if (reduced) map.jumpTo({ center: bounds.getCenter(), zoom: 4 });
+          else map.flyTo({ center: bounds.getCenter(), zoom: 4, duration: 600 });
+        } else if (reduced) map.jumpTo({ center: bounds.getCenter(), zoom: 2 });
+        else map.fitBounds(bounds, { padding: pad, maxZoom: 6, duration: 600 });
+      } catch {
+        // bounds empty (all points identical) — keep default Atlantic view.
+      }
     }
   }, [placed]);
 

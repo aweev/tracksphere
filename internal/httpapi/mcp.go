@@ -31,7 +31,14 @@ func mcpError(id any, code int, message string) map[string]any {
 }
 
 // handleMCP POST /api/v1/mcp
+//
+// Gated by TRACKSPHERE_MCP_ENABLED (default off): 404 when disabled so the
+// surface does not exist without a named consumer. Admin+ at the router.
 func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
+	if !s.cfg.MCPEnabled {
+		writeError(w, http.StatusNotFound, "not_found", "Not found")
+		return
+	}
 	var req mcpRequest
 	if !decodeJSON(w, r, &req) {
 		return
@@ -78,7 +85,10 @@ func (s *Server) mcpCall(w http.ResponseWriter, r *http.Request, id any, user *m
 	switch name {
 	case "track_shipment":
 		tn, _ := args["trackingNumber"].(string)
-		ship, err := s.shipments.ByTrackingNumber(r.Context(), strings.TrimSpace(tn))
+		// Tenant-scoped: the public projection (ByTrackingNumber) would
+		// leak other tenants' public shipments through an authenticated
+		// agent surface. Cross-tenant numbers return "not found".
+		ship, err := s.shipments.GetByTracking(r.Context(), user.TenantID, strings.TrimSpace(tn))
 		if err != nil {
 			writeJSON(w, http.StatusOK, mcpError(id, -32004, "shipment not found"))
 			return

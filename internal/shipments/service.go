@@ -199,14 +199,14 @@ func (s *Service) IngestEvent(ctx context.Context, carrier string, ev *model.Car
 			"status":     newStatus,
 			"stale":      stale,
 		}
-		if err := queue.EnqueueTx(ctx, tx, JobEvaluateRules, jobPayload, time.Time{}); err != nil {
+		if err := queue.EnqueueTxTenant(ctx, tx, &tenantID, "", JobEvaluateRules, jobPayload, time.Time{}); err != nil {
 			return err
 		}
-		if err := queue.EnqueueTx(ctx, tx, JobNotifyShipment, jobPayload, time.Time{}); err != nil {
+		if err := queue.EnqueueTxTenant(ctx, tx, &tenantID, "", JobNotifyShipment, jobPayload, time.Time{}); err != nil {
 			return err
 		}
 		if ev.ETA != nil {
-			if err := queue.EnqueueTx(ctx, tx, JobRecalculateETA, jobPayload, time.Time{}); err != nil {
+			if err := queue.EnqueueTxTenant(ctx, tx, &tenantID, "", JobRecalculateETA, jobPayload, time.Time{}); err != nil {
 				return err
 			}
 		}
@@ -265,8 +265,9 @@ func enqueueWebhookFanout(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID, ev
 		if !subscribed {
 			continue
 		}
-		if err := queue.EnqueueTx(ctx, tx, "webhook.dispatch", map[string]any{
+		if err := queue.EnqueueTxTenant(ctx, tx, &tenantID, "", "webhook.dispatch", map[string]any{
 			"endpointId": id.String(),
+			"tenantId":   tenantID.String(),
 			"eventType":  eventType,
 			"payload":    data,
 		}, time.Time{}); err != nil {
@@ -292,6 +293,11 @@ func (s *Service) ingestTx(ctx context.Context, fn func(pgx.Tx) error) error {
 
 // NotifyCustomer sends a custom notification to the customer for a shipment.
 // This is used for one-off customer updates from the exceptions triage panel.
+//
+// Budget exemption (deliberate): one-click operator actions bypass the
+// interrupt budget in workers/notify_router.go — a human explicitly pressed
+// "send", so rate-limiting their keystroke would be the bug. Automated paths
+// must still go through DecideRoute.
 func (s *Service) NotifyCustomer(ctx context.Context, tenantID, shipmentID uuid.UUID, title, message, customerMsg string) error {
 	// Verify shipment exists and belongs to tenant
 	var exists bool
@@ -311,11 +317,12 @@ func (s *Service) NotifyCustomer(ctx context.Context, tenantID, shipmentID uuid.
 		"customerMsg":  customerMsg,
 		"isCustom":     true,
 	}
-	return s.queue.Enqueue(ctx, "shipment.notify_customer", jobPayload, time.Time{})
+	return s.queue.EnqueueTenant(ctx, tenantID, "shipment.notify_customer", jobPayload, time.Time{})
 }
 
 // EmailCarrier queues an email to the carrier for a shipment.
 // This is used for one-click carrier communication from the exceptions triage panel.
+// Same budget exemption as NotifyCustomer: explicit human action.
 func (s *Service) EmailCarrier(ctx context.Context, tenantID, shipmentID uuid.UUID, title, message, note string) error {
 	var exists bool
 	err := s.pool.QueryRow(ctx, `
@@ -332,5 +339,5 @@ func (s *Service) EmailCarrier(ctx context.Context, tenantID, shipmentID uuid.UU
 		"message":      message,
 		"note":         note,
 	}
-	return s.queue.Enqueue(ctx, "shipment.email_carrier", jobPayload, time.Time{})
+	return s.queue.EnqueueTenant(ctx, tenantID, "shipment.email_carrier", jobPayload, time.Time{})
 }

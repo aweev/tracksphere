@@ -163,6 +163,9 @@ var (
 	// StripeClient for Stripe API calls
 	StripeClient = DefaultClientConfig("stripe")
 
+	// SSOClient for OIDC discovery, JWKS fetch, and code exchange
+	SSOClient = DefaultClientConfig("sso")
+
 	// EcommerceClient for Shopify/WooCommerce webhooks
 	EcommerceClient = DefaultClientConfig("ecommerce")
 

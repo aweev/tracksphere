@@ -59,27 +59,34 @@ function DashboardBody() {
     queryFn: async () =>
       (await api.get<Shipment[]>('/api/v1/shipments?limit=250&hasPosition=true')).data,
   });
-  const { data: alerts } = useQuery({
+  const { data: alertsPage } = useQuery({
     queryKey: ['alerts', 'open'],
-    queryFn: async () => (await api.get<Alert[]>('/api/v1/alerts?status=open')).data,
+    queryFn: async () =>
+      (await api.get<{ alerts: Alert[]; nextCursor?: string }>('/api/v1/alerts?status=open&limit=50'))
+        .data,
   });
+  const alerts = alertsPage?.alerts ?? [];
 
-  const critical = (alerts ?? []).filter((a) => a.severity === 'critical');
+  const critical = alerts.filter((a) => a.severity === 'critical');
 
   return (
     <div className="p-4 md:p-8">
-      <header className="mb-6 flex flex-wrap items-center justify-between gap-3">
+      <header className="dashboard-heading mb-7 flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-extrabold text-navy-950">Operations overview</h1>
-          <p className="text-sm text-slate-500">
-            Live view across every active shipment
+          <div className="page-eyebrow">
+            <span className="app-live-dot" aria-hidden="true" />
+            Control tower
+          </div>
+          <h1 className="mt-2 text-3xl font-extrabold text-navy-950">Operations overview</h1>
+          <p className="mt-1 text-sm text-slate-500">
+            A live pulse on every shipment moving through your network.
           </p>
         </div>
         <Link
           href="/exceptions"
-          className="rounded-xl bg-accent-500 px-4 py-2.5 text-sm font-semibold text-white hover:bg-accent-600"
+          className="app-primary-action rounded-xl bg-accent-500 px-4 py-2.5 text-sm font-semibold text-white hover:bg-accent-600"
         >
-          Work exceptions →
+          Review exceptions <span aria-hidden="true">→</span>
         </Link>
       </header>
 

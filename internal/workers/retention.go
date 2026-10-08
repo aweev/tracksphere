@@ -19,10 +19,15 @@ func RetentionSweep(ctx context.Context, pool *pgxpool.Pool) (int64, error) {
 	// webhook_inbox and auth_events carry no RLS by design, so they prune
 	// globally in one statement each.
 	global := []string{
-		// Processed inbox rows (keep failures for forensics).
-		`DELETE FROM webhook_inbox WHERE processed = true AND received_at < now() - interval '90 days'`,
+		// Inbox rows past 90 days, failures included: tampered-signature
+		// floods mint rows (audit-before-verify), so "keep failures forever"
+		// is an unbounded disk grant to attackers. 90d retains forensics.
+		`DELETE FROM webhook_inbox WHERE received_at < now() - interval '90 days'
+		  AND (processed = true OR error IS NOT NULL)`,
 		// Auth audit older than a year.
 		`DELETE FROM auth_events WHERE created_at < now() - interval '365 days'`,
+		// Backup ledger past 90 days (statusz reads max(finished_at)).
+		`DELETE FROM backup_runs WHERE finished_at < now() - interval '90 days'`,
 	}
 	for _, q := range global {
 		tag, err := pool.Exec(ctx, q)

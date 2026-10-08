@@ -87,6 +87,22 @@ function ShipmentDetailBody({ id }: { id: string }) {
     }
   };
 
+  const [embedCopied, setEmbedCopied] = useState(false);
+  const copyEmbed = async () => {
+    if (typeof window === 'undefined' || !shipment) return;
+    const snippet =
+      `<div id="ts-track"></div>\n` +
+      `<script src="${window.location.origin}/widget.js" ` +
+      `data-tracking="${shipment.trackingNumber}" data-target="ts-track"></script>`;
+    try {
+      await navigator.clipboard.writeText(snippet);
+      setEmbedCopied(true);
+      setTimeout(() => setEmbedCopied(false), 2000);
+    } catch {
+      /* clipboard unavailable */
+    }
+  };
+
   return (
     <div className="p-8">
       <BackLink href="/shipments">← Shipments</BackLink>
@@ -156,13 +172,23 @@ function ShipmentDetailBody({ id }: { id: string }) {
                     : 'Publish to portal'}
               </button>
               {shipment.isPublic ? (
-                <button
-                  type="button"
-                  onClick={copyLink}
-                  className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-navy-950"
-                >
-                  {copied ? 'Copied!' : 'Copy tracking link'}
-                </button>
+                <>
+                  <button
+                    type="button"
+                    onClick={copyLink}
+                    className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-navy-950"
+                  >
+                    {copied ? 'Copied!' : 'Copy tracking link'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={copyEmbed}
+                    title="Snippet that embeds a live tracker on any https site (/widget.js)"
+                    className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-navy-950"
+                  >
+                    {embedCopied ? 'Copied!' : 'Copy embed snippet'}
+                  </button>
+                </>
               ) : null}
             </div>
             {toggleVisibility.isError ? (

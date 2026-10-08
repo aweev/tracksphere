@@ -55,9 +55,14 @@ double-process a job.
 3. **Worker** claims jobs, runs the pure rules engine, writes notifications,
    recalculates ETA, emits further notifications.
 4. **SSE** - each API instance LISTENs on the channel, filters by `tenant_id`,
-   and pushes to that tenant's subscribers only.
+   and pushes to that tenant's subscribers only. Contract: SSE is a hint,
+   queries are truth — `Last-Event-ID` resumes a per-connection sequence,
+   missed events converge by refetch (the browser invalidates on every
+   frame), not by replay. Do not build exactly-once flows on SSE.
 5. **Browser** invalidates the affected TanStack Query keys
-   (`shipment.updated`, `alert.changed`).
+   (`shipment.updated`, `alert.changed`). One-click triage sends
+   (`POST /shipments/{id}/notify|email-carrier`) bypass the interrupt budget
+   by design: an explicit human action, not an automated rule.
 
 ## 3. Multi-tenancy model
 
@@ -72,8 +77,11 @@ double-process a job.
 
 Read branches are mutually exclusive by construction: portal queries never set a
 tenant, tenant queries never set the portal flag. Anything else fails **closed**
-(zero rows). `scripts/rls_test.sql` asserts all six properties and must be run as
-`tracksphere_app` - as a superuser it would pass vacuously.
+(zero rows). `scripts/rls_test.sql` asserts nine properties (cross-tenant
+invisibility, WITH CHECK rejection, fail-closed reads, portal scoping, portal
+write rejection, full-table fail-closed sweep, unpinned-write rejection, DLQ
+tenant backfill) and must be run as `tracksphere_app` - as a superuser it
+would pass vacuously.
 
 ## 4. Data model
 
@@ -114,25 +122,34 @@ Notable choices:
   embeddable widget works and `DENY` does not block it), tenant logo origins
   allowed in `img-src`, HSTS set.
 - Known gaps (documented, not hidden): no CSRF token (mitigated by
-  `SameSite=Lax` + JSON-only parsing); no key-rotation tooling; `unsafe-inline`
-  remains in `script-src` pending nonce support.
+  `SameSite=Lax` + JSON-only parsing); `unsafe-inline` remains in the Next
+  `script-src` pending nonce support (the Go API already emits per-request
+  nonces). Key rotation exists: `go run ./cmd/keygen rotate` (multi-key
+  `TRACKSPHERE_SECRET_KEYS`) + per-carrier webhook secrets; see
+  `docs/SECURITY.md` and `scripts/expire_sessions.sql` for the leak procedure.
 
 ## 6. Frontend
 
 Next.js App Router, React 19, TypeScript `strict`, Tailwind v4 (brand tokens in
 `globals.css` mirror the original Control Tower kit), TanStack Query for server
-state, MapLibre GL (OSM raster tiles, no API key) for the route map. `/api/*` is
+state, MapLibre GL (CARTO light basemap, no key, overridable via
+`NEXT_PUBLIC_TILE_URL`) for the route map. `/api/*` is
 rewritten to the Go service so there is **one origin**: cookies work without CORS
 and the SSE stream is untouched. MapLibre loads via `next/dynamic` `ssr:false`
 because it touches `window` at import.
+
+Performance budget (enforced by Lighthouse CI on `/track/[n]`): portal route
+JS <80kB, LCP p75 <2.5s on throttled 3G, map chunk deferred until the status
+sentence renders. Ops routes <120kB. `TriagePanel`/`CommandPalette`/
+`CreateShipmentForm` load via `next/dynamic`.
 
 ## 7. Phasing
 
 | Phase | Contents | Status |
 |---|---|---|
 | **1 - foundation** | schema+RLS, auth+MFA, ingestion, queue, rules, SSE, dashboard, portal, compose, CI | **done and verified** |
-| **2 - growth** | real carrier clients, SMS+WhatsApp senders, exception-queue UI, tenant webhooks out, Shopify/WooCommerce, Stripe billing | interfaces in place |
-| **3 - enterprise** | SSO/SAML, IoT cold-chain ingest (TimescaleDB), Go ETA model, ClickHouse analytics, white-label, SOC 2 evidence | designed |
+| **2 - growth** | generic HTTPS carrier polling clients, SMS+WhatsApp via Twilio (log fallback), exception-queue UI, tenant webhooks out (HMAC), Shopify/WooCommerce HMAC webhooks, Stripe billing (stdlib-only) | **shipped, needs hardening** (DLQ scoping, flood caps, billing idempotency proof) |
+| **3 - enterprise** | OIDC SSO (Google, Entra), lane-stats ETA learning + digest/analytics, white-label branding, SOC 2 evidence pack | **shipped, gated by config** (hidden unless `SSO_*`/`STRIPE_*` set; no SAML, no TimescaleDB, no ClickHouse — all deferred) |
 
 Non-goals for phase 1: k8s, Redis, Kafka/NATS, ClickHouse, microservices. Each is
 revisited only against a measured trigger (ADR 0002/0003/0005).
@@ -149,8 +166,10 @@ revisited only against a measured trigger (ADR 0002/0003/0005).
 
 ## 9. Verified behaviour (evidence)
 
-`scripts/e2e.ps1` runs 42 assertions against a live stack and currently reports
-**42 passed / 0 failed**, including: replay idempotency, tampered-signature
+`scripts/e2e.ps1` runs ~60 assertions against a live stack (§§1–11, incl. triage
+routes, MCP gate, recovery codes, notify prefs, metered-SMS refusal, backup
+freshness),
+including: replay idempotency, tampered-signature
 rejection, cross-tenant 404 on both shipment and timeline endpoints, worker-raised
 alerts, SSE delivery of `shipment.updated` **and** `alert.changed` through the
 Next proxy, and a 200 on `/login`. `scripts/rls_test.sql` independently proves

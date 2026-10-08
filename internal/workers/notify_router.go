@@ -304,13 +304,21 @@ func resolveLocation(tz string) *time.Location {
 }
 
 func dashboardURL(tenantID, shipmentID uuid.UUID) string {
-	return fmt.Sprintf("%s/shipments/%s", publicBase, shipmentID)
+	if base := publicBaseURL(); base != "" {
+		return fmt.Sprintf("%s/shipments/%s", base, shipmentID)
+	}
+	return fmt.Sprintf("/shipments/%s", shipmentID)
 }
-
-var publicBase = "https://app.tracksphere.io"
 
 // deliver writes the audit row and sends through the provider.
 func deliver(ctx context.Context, tx pgx.Tx, log *slog.Logger, tenantID, shipmentID uuid.UUID, channel, to, rhash, subject, body, severity, kind, reason string) error {
+	// Metered-channel kill-switch (P2-4): fail closed so no Twilio spend and
+	// no consent exposure happens without an explicit tenant opt-in. The
+	// caller treats this like a send failure (warn + continue, no ledger row).
+	if !meteredAllowed(ctx, tx, tenantID, channel) {
+		metrics.NotificationsFailedTotal.WithLabelValues(channel, tenantID.String(), "metered_disabled").Inc()
+		return fmt.Errorf("metered channel %q disabled for tenant", channel)
+	}
 	sender := notify.ForChannel(log, channel)
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO notifications (tenant_id, shipment_id, channel, recipient, subject, body, provider)
@@ -462,10 +470,14 @@ func HandleFlushDigests(pool *pgxpool.Pool, log *slog.Logger) func(context.Conte
 				// Grouped, not enumerated: one digest that says how many, not
 				// one message per event.
 				subject := fmt.Sprintf("TrackSphere digest: %d updates across %d categories", b.count, b.kinds)
+				queueURL := publicBaseURL() + "/exceptions"
+				if publicBaseURL() == "" {
+					queueURL = "/exceptions"
+				}
 				body := fmt.Sprintf(
 					"You have %d open updates across %d exception categories.\n\n"+
-						"Open the exception queue to triage them: %s/exceptions",
-					b.count, b.kinds, publicBase)
+						"Open the exception queue to triage them: %s",
+					b.count, b.kinds, queueURL)
 				if _, err := tx.Exec(ctx, `
 					UPDATE notification_digest_queue SET flushed_at=now()
 					WHERE tenant_id=$1 AND recipient_hash=$2 AND flushed_at IS NULL`,

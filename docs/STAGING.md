@@ -60,9 +60,9 @@ flood, `member → 403` on admin surface.
 - Metrics: `GET /api/v1/metrics` (queue depth, DLQ, SSE, pool) — scrape it.
   Alert on `tracksphere_jobs_dead > 0` and `pending` growth.
 - DLQ: `GET /api/v1/jobs/dead` (admin) → fix cause → `POST .../replay`.
-- Retention: worker archives `done>30d` / `dead>90d` daily; `webhook_inbox`
-  + `notifications` + `auth_events` are append-only audit — snapshot before
-  pruning (out of scope for staging).
+- Retention: worker archives `done>7d` / `dead>90d` daily; `webhook_inbox`
+  (incl. failures) + `notifications` + `auth_events` + `backup_runs` prune at
+  90/180/365/90d — snapshot before pruning (out of scope for staging).
 - Logs: JSON in production, one line per request with `request_id`
   (also returned as `X-Request-Id` by chi). No PII in logs.
 - Backups: nightly `pg_dump` off-host before any migration change; rollback
@@ -72,11 +72,15 @@ flood, `member → 403` on admin surface.
 
 - Compose binds `127.0.0.1:8080/3000/5433` — nothing public except via the
   edge. TLS/WAF/DDoS = Cloudflare in front.
-- Rate limits trust `RemoteAddr` post-`RealIP`: safe behind CF (loopback
-  binds), re-evaluate if you expose the API directly.
-- Security headers ship from Next (`nosniff`, `DENY` framing,
-  locked-down CSP incl. OSM tiles, `Permissions-Policy`). HSTS lives at the
-  edge — enable it in Cloudflare, not here.
+- Rate limits trust forwarding headers ONLY from `TRACKSPHERE_TRUSTED_PROXIES`
+  (chi's `RealIP` is deliberately not used — it trusts `X-Forwarded-For` from
+  any peer; see `internal/httpapi/server.go` + ADR-0010). Behind Cloudflare,
+  set `TRUSTED_PROXIES` to the CF edge ranges and `TRUST_CLOUDFLARE_HEADERS=1`;
+  with it empty, all edge traffic shares one bucket (safe but coarse).
+- Security headers ship from Next (`nosniff`, framing, locked-down CSP
+  incl. CARTO tiles, `Permissions-Policy`). HSTS lives at the edge —
+  enable it in Cloudflare, not here. Tile override:
+  `NEXT_PUBLIC_TILE_URL` / `NEXT_PUBLIC_TILE_ATTRIBUTION` (self-hosted).
 - Never run `seed` (or `seed --reset`, which refuses prod anyway) against
   staging: create the org via `/register` and exercise the trial/billing
   surface in Settings.

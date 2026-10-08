@@ -47,7 +47,12 @@ This is the control narrative behind `GET /api/v1/compliance/evidence`
 - CI (`ci.yml`): vet + tests + typecheck/build + migrate/seed/RLS proof.
   `rls_test.sql` proves six isolation properties as the restricted role.
 - Secrets: 32-char production minimums enforced at boot; per-carrier
-  rotation; seed `--reset` refuses production.
+  rotation; seed `--reset` refuses production. Rotation: `go run ./cmd/keygen
+  rotate` (multi-key `TRACKSPHERE_SECRET_KEYS`, zero-downtime), then
+  `psql -f scripts/expire_sessions.sql` after a leak to kill all sessions
+  including MFA challenges. Git-history leaks: rotate everything, expire
+  sessions, rewrite history (`git filter-repo`) or abandon the repo, enable
+  push protection.
 
 ## Privacy (GDPR)
 

@@ -71,7 +71,18 @@ func (q *Queue) WorkerID(i int) string {
 // EnqueueTx inserts a job within an existing transaction (outbox pattern).
 // A pg_notify('jobs_added') rides in the same transaction so workers wake
 // immediately on commit (poll interval remains as fallback).
+// Tenant scoping: jobs that belong to a tenant MUST be enqueued via
+// EnqueueTxTenant so jobs.tenant_id is populated and the dead-letter queue
+// can be read/replayed per tenant. The legacy wrapper below leaves
+// tenant_id NULL (system job) and must only be used for tenant-less work
+// (sweep scheduler, digest flush).
 func EnqueueTx(ctx context.Context, tx pgx.Tx, kind string, payload any, runAt time.Time) error {
+	return EnqueueTxTenant(ctx, tx, nil, "", kind, payload, runAt)
+}
+
+// EnqueueTxTenant is EnqueueTx with tenant isolation. tenantID may be nil for
+// system jobs. dedupKey is optional ("": no idempotency constraint).
+func EnqueueTxTenant(ctx context.Context, tx pgx.Tx, tenantID *uuid.UUID, dedupKey string, kind string, payload any, runAt time.Time) error {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("marshal job payload: %w", err)
@@ -79,9 +90,17 @@ func EnqueueTx(ctx context.Context, tx pgx.Tx, kind string, payload any, runAt t
 	if runAt.IsZero() {
 		runAt = time.Now().UTC()
 	}
+	var tenantArg any
+	if tenantID != nil {
+		tenantArg = *tenantID
+	}
+	var dedupArg any
+	if dedupKey != "" {
+		dedupArg = dedupKey
+	}
 	_, err = tx.Exec(ctx,
-		`INSERT INTO jobs (kind, payload, run_at) VALUES ($1, $2, $3)`,
-		kind, body, runAt)
+		`INSERT INTO jobs (kind, payload, run_at, tenant_id, dedup_key) VALUES ($1, $2, $3, $4, $5)`,
+		kind, body, runAt, tenantArg, dedupArg)
 	if err != nil {
 		return fmt.Errorf("enqueue %s: %w", kind, err)
 	}
@@ -98,6 +117,20 @@ func (q *Queue) Enqueue(ctx context.Context, kind string, payload any, runAt tim
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	if err := EnqueueTx(ctx, tx, kind, payload, runAt); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// EnqueueTenant is Enqueue with tenant isolation: the job row carries
+// tenant_id so DLQ reads stay per-tenant. Prefer this for all tenant work.
+func (q *Queue) EnqueueTenant(ctx context.Context, tenantID uuid.UUID, kind string, payload any, runAt time.Time) error {
+	tx, err := q.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := EnqueueTxTenant(ctx, tx, &tenantID, "", kind, payload, runAt); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -195,12 +228,13 @@ func (q *Queue) ReapStuck(ctx context.Context) {
 	}
 }
 
-// ArchiveOld deletes terminal jobs past retention (done>30d, dead>90d).
+// ArchiveOld deletes terminal jobs past retention (done>7d, dead>90d).
 // jobs grows forever otherwise — the claim index bloats and autovacuum lags.
+// Done rows carry no forensic value past a week (dead rows keep 90d for DLQ).
 func (q *Queue) ArchiveOld(ctx context.Context) (int64, error) {
 	tag, err := q.pool.Exec(ctx, `
 		DELETE FROM jobs
-		WHERE (status='done' AND updated_at < now() - interval '30 days')
+		WHERE (status='done' AND updated_at < now() - interval '7 days')
 		   OR (status='dead' AND updated_at < now() - interval '90 days')`)
 	if err != nil {
 		return 0, err
@@ -218,14 +252,16 @@ type DeadJob struct {
 	CreatedAt time.Time `json:"createdAt"`
 }
 
-// ListDead returns the most recent dead jobs (ops DLQ view).
-func (q *Queue) ListDead(ctx context.Context, limit int) ([]DeadJob, error) {
+// ListDead returns the most recent dead jobs for one tenant (ops DLQ view).
+// Tenant scoping is mandatory: a tenant admin must never see another tenant's
+// payloads. System jobs (tenant_id IS NULL) are invisible here.
+func (q *Queue) ListDead(ctx context.Context, tenantID uuid.UUID, limit int) ([]DeadJob, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 25
 	}
 	rows, err := q.pool.Query(ctx, `
 		SELECT id, kind, attempts, last_error, updated_at, created_at
-		FROM jobs WHERE status='dead' ORDER BY updated_at DESC LIMIT $1`, limit)
+		FROM jobs WHERE status='dead' AND tenant_id=$1 ORDER BY updated_at DESC LIMIT $2`, tenantID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -242,11 +278,12 @@ func (q *Queue) ListDead(ctx context.Context, limit int) ([]DeadJob, error) {
 }
 
 // ReplayDead returns one dead job to pending (fresh attempts, immediate run).
-func (q *Queue) ReplayDead(ctx context.Context, id int64) error {
+// Scoped by tenant: replaying another tenant's job returns not-found.
+func (q *Queue) ReplayDead(ctx context.Context, tenantID uuid.UUID, id int64) error {
 	tag, err := q.pool.Exec(ctx, `
 		UPDATE jobs SET status='pending', attempts=0, run_at=now(),
 			locked_by=NULL, locked_at=NULL, last_error=NULL, updated_at=now()
-		WHERE id=$1 AND status='dead'`, id)
+		WHERE id=$1 AND status='dead' AND tenant_id=$2`, id, tenantID)
 	if err != nil {
 		return err
 	}

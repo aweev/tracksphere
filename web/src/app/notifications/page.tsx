@@ -1,10 +1,11 @@
 'use client';
 
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
 import { RequireAuth } from '@/components/RequireAuth';
 import { Card, Empty } from '@/components/ui';
-import { api, type NotificationItem } from '@/lib/api';
+import { api, authApi, type NotificationItem } from '@/lib/api';
+import { useAuth } from '@/lib/auth';
 
 export default function NotificationsPage() {
   return (
@@ -32,6 +33,7 @@ function NotificationsBody() {
           Every customer message sent{live.length > 0 ? ` · live providers: ${live.join(', ')}` : ''}
         </p>
       </header>
+      <ChannelsCard />
       {isLoading ? (
         <Card title="Loading…">
           <div className="animate-pulse space-y-3" aria-hidden="true">
@@ -78,5 +80,73 @@ function NotificationsBody() {
         </Card>
       )}
     </div>
+  );
+}
+
+/**
+ * Metered-channel kill-switch UI (P2-4). SMS/WhatsApp default OFF tenant-wide
+ * and every send path enforces it — these toggles are the switch. Admin-only
+ * writes; members see read-only state.
+ */
+function ChannelsCard() {
+  const { user } = useAuth();
+  const qc = useQueryClient();
+  const { data: prefs } = useQuery({
+    queryKey: ['notify-prefs'],
+    queryFn: async () => (await authApi.getNotifyPrefs()).data,
+  });
+  const patch = useMutation({
+    mutationFn: (body: { smsEnabled?: boolean; whatsappEnabled?: boolean }) =>
+      authApi.updateNotifyPrefs(body),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['notify-prefs'] }),
+  });
+  const admin = user?.role === 'owner' || user?.role === 'admin';
+  if (!prefs) return null;
+  const row = (
+    label: string,
+    hint: string,
+    on: boolean,
+    set: (v: boolean) => void,
+  ) => (
+    <li className="flex flex-wrap items-center justify-between gap-2 py-3">
+      <div>
+        <div className="text-sm font-semibold text-navy-950">{label}</div>
+        <div className="text-xs text-slate-500">{hint}</div>
+      </div>
+      <button
+        type="button"
+        disabled={!admin || patch.isPending}
+        role="switch"
+        aria-checked={on}
+        aria-label={label}
+        onClick={() => set(!on)}
+        className={`rounded-full px-3 py-1.5 text-xs font-bold disabled:opacity-50 ${
+          on ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-500'
+        }`}
+      >
+        {on ? 'On' : 'Off'}
+      </button>
+    </li>
+  );
+  return (
+    <Card title="Metered channels">
+      <ul className="divide-y divide-slate-100">
+        {row(
+          'SMS',
+          'Per-message cost via Twilio. Customers must still confirm each subscription.',
+          prefs.smsEnabled,
+          (v) => patch.mutate({ smsEnabled: v }),
+        )}
+        {row(
+          'WhatsApp',
+          'Per-message cost + Business policy exposure. Confirmation required.',
+          prefs.whatsappEnabled,
+          (v) => patch.mutate({ whatsappEnabled: v }),
+        )}
+      </ul>
+      {!admin ? (
+        <p className="mt-2 text-xs text-slate-500">Only admins can change channel switches.</p>
+      ) : null}
+    </Card>
   );
 }

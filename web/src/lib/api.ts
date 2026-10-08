@@ -300,6 +300,7 @@ export interface Billing {
   trialActive: boolean
   usage: { shipments: number; seats: number; apiKeys: number; endpoints: number }
   limits: { shipments: number; seats: number; apiKeys: number; endpoints: number }
+  checkoutEnabled: boolean
 }
 
 export interface DashboardStats {
@@ -410,6 +411,24 @@ export const authApi = {
     request<{ totpEnabled: boolean }>('/api/v1/auth/mfa/disable', {
       method: 'POST',
       body: JSON.stringify({ code }),
+    }),
+  mfaRecoveryCodes: () =>
+    request<{ codes: string[] }>('/api/v1/auth/mfa/recovery-codes', { method: 'POST' }),
+  getNotifyPrefs: () =>
+    request<{
+      timezone: string
+      quietHoursStart: number
+      quietHoursEnd: number
+      digestHour: number
+      interruptHourlyCap: number
+      perShipmentCooldownMinutes: number
+      smsEnabled: boolean
+      whatsappEnabled: boolean
+    }>('/api/v1/notify/prefs'),
+  updateNotifyPrefs: (body: { smsEnabled?: boolean; whatsappEnabled?: boolean }) =>
+    request<{ smsEnabled: boolean; whatsappEnabled: boolean }>('/api/v1/notify/prefs', {
+      method: 'PATCH',
+      body: JSON.stringify(body),
     }),
   updateTheme: (theme: 'system' | 'light' | 'dark') =>
     request<{ theme: string }>('/api/v1/account/theme', {

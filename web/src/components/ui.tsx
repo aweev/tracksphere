@@ -45,7 +45,7 @@ export function Card({
   action?: React.ReactNode;
 }) {
   return (
-    <section className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-200/70">
+    <section className="app-card rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-200/70">
       {title ? (
         <header className="mb-4 flex items-center justify-between">
           <h2 className="text-sm font-bold uppercase tracking-wide text-slate-500">{title}</h2>
@@ -86,14 +86,14 @@ export function StatTile({
     return (
       <Link
         href={href}
-        className="block rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-200/70 transition hover:ring-accent-500 focus-visible:ring-2 focus-visible:ring-accent-500"
+        className="app-stat-tile block rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-200/70 transition hover:ring-accent-500 focus-visible:ring-2 focus-visible:ring-accent-500"
       >
         {body}
       </Link>
     );
   }
   return (
-    <div className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-200/70">
+    <div className="app-stat-tile rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-200/70">
       {body}
     </div>
   );

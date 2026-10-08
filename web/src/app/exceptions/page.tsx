@@ -433,6 +433,7 @@ function TriagePanel({
     try {
       const res = await fetch(`/api/v1/shipments/${alert.shipmentId}/notify`, {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tracking, title, message, customerUpdate }),
       });
@@ -450,6 +451,7 @@ function TriagePanel({
     try {
       const res = await fetch(`/api/v1/shipments/${alert.shipmentId}/email-carrier`, {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tracking, title, message, note }),
       });

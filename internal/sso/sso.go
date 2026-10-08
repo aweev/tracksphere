@@ -23,6 +23,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/tracksphere/tracksphere/internal/httpclient"
 )
 
 // Identity is a verified OIDC subject.
@@ -136,8 +138,10 @@ func (p *Provider) keys(ctx context.Context) (map[string]*rsa.PublicKey, error) 
 	jwksCache.Unlock()
 
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, p.Discovery, nil)
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	// Hardened client (M3): discovery + JWKS URLs come from our own provider
+	// config, but a compromised IdP metadata response must not turn the
+	// redirect hop into an SSRF probe — safeCheckRedirect revalidates.
+	resp, err := httpclient.NewClient(httpclient.SSOClient).Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -149,7 +153,8 @@ func (p *Provider) keys(ctx context.Context) (map[string]*rsa.PublicKey, error) 
 		return nil, fmt.Errorf("sso: bad discovery")
 	}
 	req2, _ := http.NewRequestWithContext(ctx, http.MethodGet, disc.JwksURI, nil)
-	resp2, err := client.Do(req2)
+	// Same hardened client: this URL comes from the IdP metadata itself.
+	resp2, err := httpclient.NewClient(httpclient.SSOClient).Do(req2)
 	if err != nil {
 		return nil, err
 	}
@@ -191,8 +196,7 @@ func (p *Provider) Exchange(ctx context.Context, code string) (*Identity, error)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, p.TokenURL,
 		strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := httpclient.NewClient(httpclient.SSOClient).Do(req)
 	if err != nil {
 		return nil, err
 	}

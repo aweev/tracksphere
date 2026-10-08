@@ -31,8 +31,26 @@ export default function RegisterPage() {
   };
 
   return (
-    <div className="flex h-full items-center justify-center bg-navy-950 p-4">
-      <div className="w-full max-w-md rounded-3xl bg-white p-8 shadow-2xl">
+    <main className="auth-layout">
+      <aside className="auth-story" aria-label="TrackSphere logistics platform">
+        <div className="auth-brand">
+          <span className="auth-brand-mark" aria-hidden="true">T</span>
+          <span>Track<span>Sphere</span></span>
+        </div>
+        <div className="auth-story-copy">
+          <span className="auth-kicker">Logistics intelligence</span>
+          <h2>Every movement.<br />In clear view.</h2>
+          <p>One calm, connected place to see what is moving, what needs attention, and what comes next.</p>
+        </div>
+        <div className="auth-route-art" aria-hidden="true">
+          <span className="auth-route-point auth-route-point--one" />
+          <span className="auth-route-point auth-route-point--two" />
+          <span className="auth-route-point auth-route-point--three" />
+        </div>
+        <p className="auth-story-foot">A better vantage point for global operations.</p>
+      </aside>
+      <section className="auth-form-wrap">
+      <div className="auth-card w-full max-w-md rounded-3xl bg-white p-8 shadow-2xl">
         <div className="mb-6 text-center">
           <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-xl bg-accent-500 text-lg font-bold text-white">
             T
@@ -87,7 +105,8 @@ export default function RegisterPage() {
           </Link>
         </p>
       </div>
-    </div>
+      </section>
+    </main>
   );
 }
 

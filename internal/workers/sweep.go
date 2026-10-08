@@ -616,7 +616,7 @@ var SweepStaleAfter = 2 * SweepInterval
 
 // enqueueAlertNotify queues the ops notification for a new alert.
 func enqueueAlertNotify(ctx context.Context, tx pgx.Tx, tenantID, shipmentID uuid.UUID, severity string, interrupt bool, kind string) error {
-	return queue.EnqueueTx(ctx, tx, AlertNotifyJob, map[string]any{
+	return queue.EnqueueTxTenant(ctx, tx, &tenantID, "", AlertNotifyJob, map[string]any{
 		"tenantId":   tenantID.String(),
 		"shipmentId": shipmentID.String(),
 		"severity":   severity,

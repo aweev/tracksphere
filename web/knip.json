@@ -1,0 +1,13 @@
+{
+  "$schema": "https://unpkg.com/knip@latest/schema.json",
+  "entry": [
+    "next.config.ts",
+    "playwright.config.ts",
+    "postcss.config.mjs",
+    "src/app/layout.tsx",
+    "src/app/providers.tsx",
+    "src/app/**/page.tsx",
+    "e2e/**/*.ts"
+  ],
+  "project": ["src/**/*.ts*"]
+}

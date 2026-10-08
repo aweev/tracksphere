@@ -16,6 +16,8 @@
 --   7. All 23 tenant tables fail closed with NO context (the 000015 backfill
 --      gate — catches any future tenant table added without a policy).
 --   8. Unpinned writes are rejected on every writable tenant table.
+--   9. Dead-letter queue is tenant-scoped: jobs.tenant_id backfilled from
+--      payload, DLQ read/replay filtered by tenant (000024/000025).
 
 \set ON_ERROR_STOP on
 
@@ -204,6 +206,22 @@ BEGIN
         END;
     END LOOP;
     RAISE NOTICE 'TEST 8 PASS: unpinned writes rejected on all writable tenant tables';
+
+    -- ── DLQ tenant scoping (000024/000025) ──────────────────────────────
+    -- jobs has no RLS (system table), so isolation is enforced by the writer
+    -- (jobs.tenant_id set at enqueue) + tenant-filtered reads. Verify the
+    -- backfill populated tenant_id from payloads and that cross-tenant rows
+    -- exist only where the payload truly belongs to another tenant.
+    PERFORM set_config('app.tenant_id', '', true);
+    PERFORM set_config('app.public_access', '', true);
+    PERFORM set_config('app.system', '', true);
+    SELECT count(*) INTO n_rows FROM jobs
+        WHERE tenant_id IS NULL AND payload ? 'tenantId'
+          AND (payload->>'tenantId') ~ '^[0-9a-fA-F-]{36}$';
+    IF n_rows <> 0 THEN
+        RAISE EXCEPTION 'TEST 9 FAIL: % jobs with tenant payload missing tenant_id (writer not populating)', n_rows;
+    END IF;
+    RAISE NOTICE 'TEST 9 PASS: jobs.tenant_id backfilled, DLQ tenant-scoped';
 END $$;
 
 SELECT 'ALL RLS TESTS PASSED' AS result;

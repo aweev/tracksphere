@@ -206,6 +206,26 @@ func (r *Repository) ByTrackingNumber(ctx context.Context, tracking string) (*mo
 	return ship, tx.Commit(ctx)
 }
 
+// GetByTracking resolves a tracking number inside one tenant (authenticated
+// surfaces: MCP, ops tools). Unlike ByTrackingNumber it never crosses tenants:
+// the lookup runs under WithTenant so FORCE RLS admits only the caller's rows
+// and anything else is ErrNotFound (no cross-tenant oracle).
+func (r *Repository) GetByTracking(ctx context.Context, tenantID uuid.UUID, tracking string) (*model.Shipment, error) {
+	var out *model.Shipment
+	err := db.WithTenant(ctx, r.pool, tenantID, func(tx pgx.Tx) error {
+		s, err := scanShipment(tx.QueryRow(ctx, `
+			SELECT `+shipmentCols+` FROM shipments
+			WHERE tracking_number=$1
+			ORDER BY updated_at DESC LIMIT 1`, strings.TrimSpace(tracking)))
+		if err != nil {
+			return err
+		}
+		out = s
+		return nil
+	})
+	return out, err
+}
+
 // PublicEvents is the public-portal timeline (same public_access contract;
 // the policy re-verifies the parent shipment is public).
 func (r *Repository) PublicEvents(ctx context.Context, shipmentID uuid.UUID) ([]model.ShipmentEvent, error) {

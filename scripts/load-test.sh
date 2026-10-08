@@ -7,6 +7,9 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 API_BASE="${API_BASE:-http://localhost:8080}"
+# HMAC secret for the carrier webhook (must match the API's
+# TRACKSPHERE_CARRIER_WEBHOOK_SECRET; defaults to the local dev secret).
+WEBHOOK_SECRET="${WEBHOOK_SECRET:-dev-carrier-webhook-secret}"
 
 # Default parameters
 NUM_SHIPMENTS="${NUM_SHIPMENTS:-10000}"
@@ -53,10 +56,15 @@ Options:
 
 Environment variables:
     API_BASE            API base URL
+    WEBHOOK_SECRET      Carrier HMAC secret (default: dev-carrier-webhook-secret)
     NUM_SHIPMENTS       Number of shipments
     CONCURRENT_WEBHOOKS Concurrent webhook workers
     DURATION            Test duration
     RAMP_UP             Ramp-up time
+
+NOTE: webhooks target shipments that must already exist (unknown tracking
+numbers return 404 by design). Seed or create them first; 404s still
+exercise the HMAC + inbox path but not ingestion.
 
 Example:
     $0 --shipments 10000 --webhooks 100 --duration 120
@@ -125,15 +133,16 @@ WEBHOOK_PAYLOAD='{
 send_webhook() {
     local shipment_id=$1
     local seq=$2
-    
+
     payload=$(echo "$WEBHOOK_PAYLOAD" | sed "s/{{SHIPMENT_ID}}/${shipment_id}/g; s/{{SEQ}}/${seq}/g")
-    
-    # Send to carrier webhook endpoint (public, HMAC-signed)
-    # For load test, we'll use a simple carrier that doesn't require HMAC
-    curl -s -X POST "${API_BASE}/api/v1/webhooks/carriers/maersk" \
+
+    # Real HMAC-SHA256 signature: a load test that always 401s measures
+    # nothing. Header format: X-TrackSphere-Signature: sha256=<hex>.
+    sig=$(printf '%s' "$payload" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | awk '{print $NF}')
+    curl -s -o /dev/null -w '%{http_code}\n' -X POST "${API_BASE}/api/v1/webhooks/carriers/maersk" \
         -H "Content-Type: application/json" \
-        -H "X-TrackSphere-Signature: sha256=test" \
-        -d "$payload" > /dev/null
+        -H "X-TrackSphere-Signature: sha256=${sig}" \
+        -d "$payload"
 }
 
 # Function to run webhook worker

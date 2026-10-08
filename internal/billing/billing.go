@@ -22,6 +22,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/tracksphere/tracksphere/internal/httpclient"
 )
 
 // Enabled reports whether Stripe checkout can run.
@@ -68,8 +70,10 @@ func CreateCheckoutSession(plan, tenantID, customerEmail string) (string, error)
 	}
 	req.SetBasicAuth(os.Getenv("STRIPE_SECRET_KEY"), "")
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Do(req)
+	// Hardened client (M3): fixed-host vendor call, but it still gets the
+	// SSRF-safe transport, TLS 1.2+ floor, and the stripe circuit breaker
+	// instead of an unbounded raw client that can wedge the checkout path.
+	resp, err := httpclient.NewClient(httpclient.StripeClient).Do(req)
 	if err != nil {
 		return "", err
 	}

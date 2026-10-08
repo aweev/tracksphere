@@ -106,13 +106,13 @@ func (s *Server) versioningMiddleware(next http.Handler) http.Handler {
 		w.Header().Set("X-API-Version", "v1")
 		w.Header().Set("X-API-Deprecated", "false")
 		
-		// Check for deprecated version in Accept-Version header
+		// Check for deprecated version in Accept-Version header.
+		// No v2 exists: there is no Sunset date and no successor link (a
+		// hardcoded fictional domain here would be worse than no header).
 		acceptVersion := r.Header.Get("Accept-Version")
 		if acceptVersion != "" && acceptVersion != "v1" {
 			w.Header().Set("X-API-Deprecated", "true")
 			w.Header().Set("Deprecation", "true")
-			w.Header().Set("Sunset", "Sat, 01 Jan 2027 00:00:00 GMT")
-			w.Header().Set("Link", "<https://api.tracksphere.io/api/v1>; rel=\"successor-version\"")
 		}
 		
 		next.ServeHTTP(w, r)

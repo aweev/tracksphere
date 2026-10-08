@@ -200,7 +200,7 @@ func (s *Server) handleTriggerPoll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { _ = tx.Rollback(r.Context()) }()
-	if err := queue.EnqueueTx(r.Context(), tx, "shipment.poll", map[string]any{
+	if err := queue.EnqueueTxTenant(r.Context(), tx, &user.TenantID, "", "shipment.poll", map[string]any{
 		"credentialId": credID.String(),
 		"tenantId":     user.TenantID.String(),
 		"carrier":      carrier,

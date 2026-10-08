@@ -8,7 +8,8 @@ import (
 )
 
 // handleListDeadJobs GET /api/v1/jobs/dead — dead-letter queue (admin+).
-// Jobs carry cross-tenant payloads, so this stays an ops/admin surface.
+// Tenant-scoped: a tenant admin sees only their own tenant's dead jobs.
+// System jobs (tenant_id IS NULL) are invisible here by design.
 func (s *Server) handleListDeadJobs(w http.ResponseWriter, r *http.Request) {
 	limit := 25
 	if raw := r.URL.Query().Get("limit"); raw != "" {
@@ -17,7 +18,7 @@ func (s *Server) handleListDeadJobs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	q := queue.New(s.pool, 0, s.log)
-	dead, err := q.ListDead(r.Context(), limit)
+	dead, err := q.ListDead(r.Context(), currentTenantID(r), limit)
 	if err != nil {
 		s.domainError(w, err)
 		return
@@ -34,7 +35,7 @@ func (s *Server) handleReplayDeadJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := queue.New(s.pool, 0, s.log)
-	if err := q.ReplayDead(r.Context(), id); err != nil {
+	if err := q.ReplayDead(r.Context(), currentTenantID(r), id); err != nil {
 		writeError(w, http.StatusNotFound, "not_found", err.Error())
 		return
 	}

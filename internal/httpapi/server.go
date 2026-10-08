@@ -120,9 +120,14 @@ func (s *Server) Router() http.Handler {
 
 			r.Get("/auth/me", s.requireRole(RoleMember, s.handleMe))
 			r.Post("/auth/logout", s.requireRole(RoleMember, s.handleLogout))
-			r.Post("/auth/mfa/enroll", s.requireRole(RoleMember, s.handleMFAEnroll))
-			r.Post("/auth/mfa/enable", s.requireRole(RoleMember, s.handleMFAEnable))
-			r.Post("/auth/mfa/disable", s.requireRole(RoleMember, s.handleMFADisable))
+		r.Post("/auth/mfa/enroll", s.requireRole(RoleMember,
+			s.rateLimit("mfa-enroll", 5, time.Minute, s.handleMFAEnroll)))
+		r.Post("/auth/mfa/enable", s.requireRole(RoleMember,
+			s.rateLimit("mfa-enroll", 5, time.Minute, s.handleMFAEnable)))
+		r.Post("/auth/mfa/disable", s.requireRole(RoleMember,
+			s.rateLimit("mfa-enroll", 5, time.Minute, s.handleMFADisable)))
+		r.Post("/auth/mfa/recovery-codes", s.requireRole(RoleMember,
+			s.rateLimit("mfa-enroll", 5, time.Minute, s.handleMFARecoveryCodes)))
 			r.Get("/auth/sessions", s.requireRole(RoleMember, s.handleListSessions))
 			r.Delete("/auth/sessions/{id}", s.requireRole(RoleMember, s.handleRevokeSession))
 			r.Post("/auth/password/change", s.requireRole(RoleMember, s.handleChangePassword))
@@ -142,6 +147,10 @@ r.Get("/dashboard", s.requireRole(RoleMember, s.handleDashboard))
 		r.Patch("/shipments/{id}", s.requireRole(RoleAdmin, s.handleUpdateShipment))
 		r.Get("/shipments/{id}/events", s.requireRole(RoleMember, s.handleShipmentEvents))
 		r.Post("/shipments/{id}/events", s.requireRole(RoleAdmin, s.handleManualEvent))
+		// One-click triage actions from the exception queue (admin+: an
+		// operator explicitly sending mail, not an automated rule).
+		r.Post("/shipments/{id}/notify", s.requireRole(RoleAdmin, s.handleNotifyCustomer))
+		r.Post("/shipments/{id}/email-carrier", s.requireRole(RoleAdmin, s.handleEmailCarrier))
 
 		r.Get("/alerts", s.requireRole(RoleMember, s.handleListAlerts))
 		r.Post("/alerts/{id}/resolve", s.requireRole(RoleAdmin, s.resolveHandler))
@@ -152,6 +161,8 @@ r.Get("/dashboard", s.requireRole(RoleMember, s.handleDashboard))
 			r.Get("/analytics/digest", s.requireRole(RoleMember, s.handleDigest))
 			r.Get("/notifications", s.requireRole(RoleMember, s.handleListNotifications))
 			r.Get("/notify/status", s.requireRole(RoleMember, s.handleNotifyStatus))
+			r.Get("/notify/prefs", s.requireRole(RoleMember, s.handleGetNotifyPrefs))
+			r.Patch("/notify/prefs", s.requireRole(RoleAdmin, s.handleUpdateNotifyPrefs))
 
 			// P2 growth surfaces
 			r.Get("/carriers", s.requireRole(RoleAdmin, s.handleListCarriers))
@@ -184,7 +195,9 @@ r.Get("/shipments/{id}/legs", s.requireRole(RoleMember, s.handleListLegs))
 			r.Delete("/account", s.requireRole(RoleOwner, s.handleEraseAccount))
 			r.Get("/compliance/evidence", s.requireRole(RoleOwner, s.handleEvidence))
 
-			r.Post("/mcp", s.requireRole(RoleMember, s.handleMCP))
+			// Agent tool access: disabled unless TRACKSPHERE_MCP_ENABLED=1,
+			// admin+ only (agents inherit broad read). See mcp.go.
+			r.Post("/mcp", s.requireRole(RoleAdmin, s.handleMCP))
 
 			r.Get("/webhooks/inbox", s.requireRole(RoleMember, s.handleListWebhookInbox))
 			r.Get("/webhooks/out", s.requireRole(RoleAdmin, s.handleListWebhookEndpoints))

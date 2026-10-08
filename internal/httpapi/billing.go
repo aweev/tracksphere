@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/tracksphere/tracksphere/internal/billing"
 	"github.com/tracksphere/tracksphere/internal/db"
 )
 
@@ -86,11 +87,14 @@ func (s *Server) handleBilling(w http.ResponseWriter, r *http.Request) {
 		daysLeft = 0
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"plan":         plan,
-		"trialEndsAt":  trialEnds,
+		"plan":          plan,
+		"trialEndsAt":   trialEnds,
 		"trialDaysLeft": daysLeft,
-		"trialActive":  trialActive,
-		"usage":        usage,
-		"limits":       limits,
+		"trialActive":   trialActive,
+		"usage":         usage,
+		"limits":        limits,
+		// P2-2: self-serve upgrade buttons render only when Stripe is
+		// configured; otherwise the card shows contact-sales copy.
+		"checkoutEnabled": billing.Enabled(),
 	})
 }

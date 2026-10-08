@@ -15,11 +15,4 @@ export function relativeTime(iso: string | undefined, nowMs = Date.now()): strin
   return fmt(Math.round(hours / 24), 'd');
 }
 
-/** "12m old" age label for queue rows. */
-export function ageLabel(iso: string, nowMs = Date.now()): string {
-  const mins = Math.max(0, Math.round((nowMs - new Date(iso).getTime()) / 60000));
-  if (mins < 60) return `${mins}m old`;
-  const hours = Math.round(mins / 60);
-  if (hours < 48) return `${hours}h old`;
-  return `${Math.round(hours / 24)}d old`;
-}
+

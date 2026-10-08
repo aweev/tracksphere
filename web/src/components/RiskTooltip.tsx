@@ -69,9 +69,16 @@ export function RiskTooltip({
   ].filter(Boolean);
 
   return (
-    <div className="relative inline-block" tabIndex={0} onFocus={() => setIsOpen(true)} onBlur={() => setIsOpen(false)}>
+    <div
+      className="relative inline-block"
+      tabIndex={0}
+      onFocus={() => setIsOpen(true)}
+      onBlur={() => setIsOpen(false)}
+      onMouseEnter={() => setIsOpen(true)}
+      onMouseLeave={() => setIsOpen(false)}
+    >
       {children}
-      {(isOpen || (typeof window !== 'undefined' && document.activeElement === (children as ReactNode))) && (
+      {isOpen && (
         <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-50 min-w-[280px] max-w-[320px] rounded-xl bg-white p-4 shadow-lg ring-1 ring-slate-200 animate-in fade-in-0 zoom-in-95">
           <div className="flex items-center justify-between mb-3">
             <h4 className="text-sm font-bold text-navy-950">Risk Score: {score}/100</h4>
@@ -97,28 +104,5 @@ export function RiskTooltip({
         </div>
       )}
     </div>
-  );
-}
-
-/**
- * Wrapper for RiskBadge with tooltip
- */
-export function RiskBadgeWithTooltip({
-  tier,
-  score,
-  breakdown,
-  ...props
-}: {
-  tier: 'critical' | 'at_risk' | 'watch' | 'clear';
-  score: number;
-  breakdown: RiskBreakdown;
-} & React.ComponentPropsWithoutRef<'span'>) {
-  return (
-    <RiskTooltip score={score} breakdown={breakdown}>
-      <span {...props} className={`risk-badge risk-${tier}`}>
-        {tier.replace('_', ' ')}
-        {score > 0 && ` · ${score}`}
-      </span>
-    </RiskTooltip>
   );
 }

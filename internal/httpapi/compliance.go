@@ -24,10 +24,23 @@ func (s *Server) handleStatusz(w http.ResponseWriter, r *http.Request) {
 	_ = s.pool.QueryRow(r.Context(),
 		`SELECT count(*) FILTER (WHERE status='pending'),
 		        count(*) FILTER (WHERE status='dead') FROM jobs`).Scan(&pending, &dead)
+	// Backup freshness is a live fact, not a doc claim: the backup sidecar
+	// (deploy/backup.sh) writes backup_runs after each pg_dump.
+	var lastBackup *time.Time
+	_ = s.pool.QueryRow(r.Context(),
+		`SELECT max(finished_at) FROM backup_runs WHERE ok=true`).Scan(&lastBackup)
+	backupAgeH := -1.0
+	if lastBackup != nil {
+		backupAgeH = time.Since(*lastBackup).Hours()
+	}
 	status := "operational"
 	if !dbOK {
 		status = "degraded"
 	} else if dead > 0 {
+		status = "degraded"
+	} else if lastBackup == nil || backupAgeH > 30 {
+		// No proven backup, or the last one is older than the daily
+		// schedule + margin: the status page must say so.
 		status = "degraded"
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -36,6 +49,7 @@ func (s *Server) handleStatusz(w http.ResponseWriter, r *http.Request) {
 		"version":  buildVersion,
 		"uptimeSec": int(time.Since(s.startedAt).Seconds()),
 		"queue":    map[string]any{"pending": pending, "dead": dead},
+		"backup":   map[string]any{"lastSuccess": lastBackup, "ageHours": backupAgeH},
 	})
 }
 
@@ -55,7 +69,7 @@ func (s *Server) handleEvidence(w http.ResponseWriter, r *http.Request) {
 			"mfaAvailable":      true,
 			"ssoAvailable":      sso.Status()["google"] || sso.Status()["microsoft"],
 			"dataResidency":     s.cfg.Region,
-			"retentionWindows":  map[string]any{"jobsDone": "30d", "jobsDead": "90d", "inbox": "90d", "notifications": "180d", "authEvents": "365d"},
+			"retentionWindows":  map[string]any{"jobsDone": "7d", "jobsDead": "90d", "inbox": "90d", "notifications": "180d", "authEvents": "365d"},
 			"gdprExportErase":   true,
 		},
 	}

@@ -231,6 +231,28 @@ Check ($null -ne $invite.data.tempPassword) 'invite returns one-time password'
 $team = ApiJson '/api/v1/team' -CookieHeader $login.Header
 Check ((@($team.data) | Where-Object { $_.email -like 'mate-*' }).Count -ge 1) 'team lists the invitee'
 
+# -- 4e. Triage routes, MCP gate, recovery codes, notify prefs ---------------
+Step '4e. Triage, MCP gate, recovery codes, notify prefs'
+$notify = Api "/api/v1/shipments/$shipmentId/notify" 'Post' @{ tracking = $tracking; title = 'E2E update'; message = 'heads up'; customerUpdate = 'hi' } $login.Header
+Check ($notify.StatusCode -eq 200) 'one-click customer notify queues (admin route live)'
+$notifyMember = Api "/api/v1/shipments/$shipmentId/notify" 'Post' @{ tracking = $tracking; title = 'x'; message = 'y'; customerUpdate = 'z' } $agentLogin.Header
+Check ($notifyMember.StatusCode -eq 403) 'member gets 403 on triage notify (admin-only)'
+$carrierMail = Api "/api/v1/shipments/$shipmentId/email-carrier" 'Post' @{ tracking = $tracking; title = 'E2E'; message = 'm'; note = 'n' } $login.Header
+Check ($carrierMail.StatusCode -eq 200) 'one-click carrier email queues (admin route live)'
+
+$mcp = Api '/api/v1/mcp' 'Post' @{ jsonrpc = '2.0'; id = 1; method = 'tools/list' } $login.Header
+Check ($mcp.StatusCode -eq 404) 'MCP 404s while TRACKSPHERE_MCP_ENABLED=0 (no phantom surface)'
+
+$recov = Api '/api/v1/auth/mfa/recovery-codes' 'Post' $null $login.Header
+Check ($recov.StatusCode -eq 400) 'recovery codes need enrollment first (route live, 400 not_enrolled)'
+
+$prefs = ApiJson '/api/v1/notify/prefs' -CookieHeader $login.Header
+Check ($prefs.data.smsEnabled -eq $false) 'metered SMS defaults OFF (kill-switch closed)'
+$patched = ApiJson '/api/v1/notify/prefs' 'Patch' @{ smsEnabled = $true } $login.Header
+Check ($patched.data.smsEnabled -eq $true) 'admin can open the SMS switch'
+$restored = ApiJson '/api/v1/notify/prefs' 'Patch' @{ smsEnabled = $false } $login.Header
+Check ($restored.data.smsEnabled -eq $false) 'switch restores to OFF (no spend left on)'
+
 # -- 5. Carrier webhook ingestion ----------------------------------------
 Step '5. Carrier webhook ingestion'
 $payload = @{
@@ -336,6 +358,8 @@ Check ($brandGet.data.company -eq "E2E Co $runId") 'brand persists'
 
 $sub = Invoke-ApiRaw "/api/v1/track/$tracking/subscribe" 'Post' '{"channel":"email","recipient":"fan@example.com"}'
 Check ($sub.StatusCode -eq 201) 'public notify-me subscribe works'
+$smsOff = Invoke-ApiRaw "/api/v1/track/$tracking/subscribe" 'Post' '{"channel":"sms","recipient":"+15551234567"}'
+Check ($smsOff.StatusCode -eq 409 -and $smsOff.Content -match 'channel_disabled') 'metered SMS refused while the tenant switch is off (P2-4)'
 Check ($public.data.brand.color -ne $null) 'public portal carries brand (checked below)'
 $public2 = ApiJson "/api/v1/track/$tracking"
 Check ($public2.data.brand.company -eq "E2E Co $runId") 'public portal is white-labeled'
@@ -411,6 +435,7 @@ Check ($agentEvidence.StatusCode -eq 403) 'member gets 403 on evidence (owner-on
 
 $statusz = Invoke-ApiRaw '/api/v1/statusz'
 Check ($statusz.StatusCode -eq 200 -and $statusz.Content -match 'operational|degraded') 'public status payload responds'
+Check ($statusz.Content -match '"backup"') 'statusz reports backup freshness (P1-1)'
 
 $ssoStatus = Invoke-ApiRaw '/api/v1/auth/sso/status'
 Check ($ssoStatus.StatusCode -eq 200 -and $ssoStatus.Content -match 'google') 'SSO status advertises providers'

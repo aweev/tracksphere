@@ -1,9 +1,27 @@
 # TrackSphere Disaster Recovery Runbook
 
-**RTO Target:** < 4 hours  
-**RPO Target:** < 1 hour  
-**Last Tested:** [DATE]  
+**RTO Target:** < 4 hours
+**RPO Target:** < 1 hour
+**Last Tested:** [DATE]
 **Next Test:** [DATE + 90 days]
+
+## 0. Backup automation (live, not aspirational)
+
+- `backup` compose service (`deploy/docker-compose.yml` + `deploy/backup.sh`)
+  dumps nightly to the `pgbackups` volume; keep 7 by default (`BACKUP_KEEP`).
+  **Copy the volume off-host** (S3/R2/rsync) — a dump on the same disk as the
+  DB is not a backup.
+- Every dump writes `backup_runs`; `GET /api/v1/statusz` reports
+  `.backup.lastSuccess/.ageHours` and flips to `degraded` past 30h without a
+  proven backup. Alert on `status != operational` and on `backup_runs` gaps.
+- Pre-migration manual dumps still required until pgBackRest PITR ships
+  (see `docs/pgbackrest-setup.md`): record the SHA in the PR (PR template).
+
+### Drill log (append each rehearsal — no drill, no "production-ready")
+
+| Date | Tester | Restore source | RTO | RPO | RLS proof | Gaps |
+|---|---|---|---|---|---|---|
+| _none yet_ | | | | | | _this row is the gate_ |
 
 ---
 

@@ -82,7 +82,8 @@ func PollDueCredentials(ctx context.Context, pool *pgxpool.Pool) (int, error) {
 		return 0, err
 	}
 	for _, j := range jobs {
-		if err := queue.EnqueueTx(ctx, tx, ShipmentPollJob, j, time.Time{}); err != nil {
+		tid := j.TenantID
+		if err := queue.EnqueueTxTenant(ctx, tx, &tid, "", ShipmentPollJob, j, time.Time{}); err != nil {
 			return 0, err
 		}
 		// Stamp under the system flag: this is a scheduler-owned column and

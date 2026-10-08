@@ -56,6 +56,17 @@ type Config struct {
 	// APIWorkers is the number of API worker processes (for pool sizing)
 	APIWorkers int
 
+	// WebhookFloodPerHour caps webhook_inbox rows per carrier per rolling
+	// hour before the carrier webhook returns 429. Attackers mint inbox rows
+	// (audit-before-verify), so the inbox needs a flood guard, not just a
+	// per-IP rate limit. 0 disables the guard (not recommended).
+	WebhookFloodPerHour int
+
+	// MCPEnabled gates POST /api/v1/mcp (Model Context Protocol, agent
+	// tool access). Off by default: an authenticated agent surface with no
+	// named consumer must not listen. Enable only with a real integration.
+	MCPEnabled bool
+
 	LogLevel string
 }
 
@@ -90,6 +101,12 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	cfg.WorkerPollInterval = time.Duration(pollMS) * time.Millisecond
+	if cfg.WebhookFloodPerHour, err = getInt("TRACKSPHERE_WEBHOOK_FLOOD_PER_HOUR", 10000, 0, 1_000_000); err != nil {
+		return nil, err
+	}
+	if cfg.MCPEnabled, err = getBool("TRACKSPHERE_MCP_ENABLED", false); err != nil {
+		return nil, err
+	}
 
 	ttlHours, err := getInt("TRACKSPHERE_SESSION_TTL_HOURS", 168, 1, 24*90)
 	if err != nil {
@@ -275,6 +292,17 @@ func parseCIDRs(s string) ([]*net.IPNet, error) {
 		out = append(out, &net.IPNet{IP: ip, Mask: net.CIDRMask(bits, bits)})
 	}
 	return out, nil
+}
+
+// SetTestProxies replaces TrustedProxies from CIDR/IP strings. Test helper
+// so httpapi tests can build trust configs without env indirection.
+func (c *Config) SetTestProxies(cidrs ...string) error {
+	nets, err := parseCIDRs(strings.Join(cidrs, ","))
+	if err != nil {
+		return err
+	}
+	c.TrustedProxies = nets
+	return nil
 }
 
 // IsTrustedProxy reports whether addr belongs to a configured trusted proxy.

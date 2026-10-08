@@ -137,9 +137,16 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 
 	secretBytes, err := auth.OpenMulti(s.cfg.SecretKeys, secretSealed)
 	if err != nil || !auth.VerifyTOTP(string(secretBytes), req.Code) {
-		s.auditEvent(r.Context(), &user.TenantID, &user.ID, user.Email, "mfa_failed", r)
-		writeError(w, http.StatusUnauthorized, "bad_code", "Incorrect verification code")
-		return
+		// TOTP miss: fall back to single-use recovery codes (lost
+		// authenticator path). Consumed atomically; unknown-vs-used codes
+		// are indistinguishable to the caller.
+		if s.consumeRecoveryCode(r.Context(), user.ID, req.Code) {
+			s.auditEvent(r.Context(), &user.TenantID, &user.ID, user.Email, "mfa_recovery_used", r)
+		} else {
+			s.auditEvent(r.Context(), &user.TenantID, &user.ID, user.Email, "mfa_failed", r)
+			writeError(w, http.StatusUnauthorized, "bad_code", "Incorrect verification code")
+			return
+		}
 	}
 
 	// Consume the challenge (one-time use), mint the real session.
@@ -183,19 +190,11 @@ func (s *Server) issueSession(ctx context.Context, tx pgx.Tx, user model.User, t
 		INSERT INTO sessions (user_id, tenant_id, token_hash, mfa_pending, expires_at, ip, user_agent)
 		VALUES ($1,$2,$3,$4,$5,$6,$7)`,
 		user.ID, tenantID, hash, mfaPending, time.Now().Add(ttl),
-		clientIP(r), r.UserAgent())
+		s.clientIP(r), r.UserAgent())
 	if err != nil {
 		return "", err
 	}
 	return raw, nil
-}
-
-// clientIP extracts the caller address for the audit trail.
-func clientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		return xff
-	}
-	return r.RemoteAddr
 }
 
 // setSessionCookie attaches the session cookie (Secure in production).

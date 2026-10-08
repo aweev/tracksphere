@@ -32,14 +32,21 @@ export default function ShipmentMap({ points }: { points: MapPoint[] }) {
       style: {
         version: 8,
         sources: {
-          osm: {
+          // Same compliant default as FleetMap: CARTO light, overridable
+          // via NEXT_PUBLIC_TILE_URL / NEXT_PUBLIC_TILE_ATTRIBUTION.
+          carto: {
             type: 'raster',
-            tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+            tiles: [
+              process.env.NEXT_PUBLIC_TILE_URL ??
+                'https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png',
+            ],
             tileSize: 256,
-            attribution: '© OpenStreetMap contributors',
+            attribution:
+              process.env.NEXT_PUBLIC_TILE_ATTRIBUTION ??
+              '© OpenStreetMap contributors © CARTO',
           },
         },
-        layers: [{ id: 'osm', type: 'raster', source: 'osm' }],
+        layers: [{ id: 'carto', type: 'raster', source: 'carto' }],
       },
       center: [8, 10],
       zoom: 1.5,

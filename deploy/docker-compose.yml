@@ -48,6 +48,9 @@ services:
       TRACKSPHERE_CARRIER_WEBHOOK_SECRET: ${TRACKSPHERE_CARRIER_WEBHOOK_SECRET:?set in .env}
       TRACKSPHERE_LOG_LEVEL: ${TRACKSPHERE_LOG_LEVEL:-info}
       TRACKSPHERE_SESSION_TTL_HOURS: ${TRACKSPHERE_SESSION_TTL_HOURS:-168}
+      TRACKSPHERE_TRUSTED_PROXIES: ${TRACKSPHERE_TRUSTED_PROXIES:-}
+      TRACKSPHERE_TRUST_CLOUDFLARE_HEADERS: ${TRUST_CLOUDFLARE_HEADERS:-0}
+      TRACKSPHERE_WEBHOOK_FLOOD_PER_HOUR: ${TRACKSPHERE_WEBHOOK_FLOOD_PER_HOUR:-10000}
     ports:
       - '127.0.0.1:8080:8080'
 
@@ -85,5 +88,29 @@ services:
     ports:
       - '${WEB_PORT:-3000}:3000'
 
+  # Nightly pg_dump sidecar (P1-1). Dumps over the compose network to
+  # /backups (host-mounted volume — copy off-host per docs/pgbackrest-setup.md
+  # for real DR) and records each run in backup_runs, which /statusz reads.
+  # No ports: never publicly reachable.
+  backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER:-tracksphere}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      PGDATABASE: ${POSTGRES_DB:-tracksphere}
+      BACKUP_DIR: /backups
+      BACKUP_KEEP: ${BACKUP_KEEP:-7}
+      BACKUP_INTERVAL_S: ${BACKUP_INTERVAL_S:-86400}
+    volumes:
+      - ./backup.sh:/backup.sh:ro
+      - pgbackups:/backups
+    command: ['sh', '/backup.sh']
+
 volumes:
   pgdata:
+  pgbackups:

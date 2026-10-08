@@ -17,7 +17,7 @@ func (s *Server) auditEvent(ctx context.Context, tenantID, userID *uuid.UUID, em
 	_, _ = s.pool.Exec(ctx, `
 		INSERT INTO auth_events (tenant_id, user_id, email, kind, ip, user_agent)
 		VALUES ($1,$2,$3,$4,$5,$6)`,
-		tenantID, userID, email, kind, clientIP(r), r.UserAgent())
+		tenantID, userID, email, kind, s.clientIP(r), r.UserAgent())
 }
 
 type sessionView struct {

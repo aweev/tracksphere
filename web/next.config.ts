@@ -59,7 +59,7 @@ const nextConfig: NextConfig = {
               "default-src 'self'",
               `script-src ${scriptSrc.join(' ')}`,
               "style-src 'self' 'unsafe-inline'",
-              `img-src 'self' data: https://tile.openstreetmap.org ${logoOriginPattern}`,
+              `img-src 'self' data: https://*.basemaps.cartocdn.com ${logoOriginPattern}`,
               "connect-src 'self'",
               "font-src 'self' data:",
               "object-src 'none'",

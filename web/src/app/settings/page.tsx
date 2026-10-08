@@ -174,7 +174,7 @@ function BillingCard() {
           </li>
         ))}
       </ul>
-      {data.plan === 'starter' ? (
+      {data.plan === 'starter' && data.checkoutEnabled ? (
         <div className="mt-4 flex flex-wrap gap-2">
           <button type="button" onClick={() => void upgrade('growth')}
             className="rounded-xl bg-accent-500 px-4 py-2 text-sm font-semibold text-white">
@@ -220,6 +220,15 @@ function MfaCard() {
     },
     onError: () => setMsg('Incorrect code.'),
   });
+  const [codes, setCodes] = useState<string[] | null>(null);
+  const recovery = useMutation({
+    mutationFn: () => authApi.mfaRecoveryCodes(),
+    onSuccess: (r) => {
+      setCodes(r.data.codes);
+      setMsg('New recovery codes issued — old ones are revoked. Save them now.');
+    },
+    onError: () => setMsg('Recovery codes need an enabled authenticator.'),
+  });
   const submit = (fn: (c: string) => void) => (e: FormEvent) => {
     e.preventDefault();
     setMsg('');
@@ -232,7 +241,28 @@ function MfaCard() {
           className="rounded-xl bg-navy-950 px-4 py-2 text-sm font-semibold text-white">
           {enroll.isPending ? '…' : 'Enroll (new secret)'}
         </button>
+        <button type="button" onClick={() => recovery.mutate()}
+          className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold">
+          {recovery.isPending ? '…' : 'New recovery codes'}
+        </button>
       </div>
+      {codes ? (
+        <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm" role="alert">
+          <p className="font-semibold text-amber-900">
+            Save these now — they are shown once and each works a single time:
+          </p>
+          <ul className="mt-2 grid grid-cols-1 gap-1 font-mono text-xs sm:grid-cols-2">
+            {codes.map((c) => (
+              <li key={c} className="rounded bg-white px-2 py-1 text-navy-950">{c}</li>
+            ))}
+          </ul>
+          <button type="button"
+            onClick={() => void navigator.clipboard?.writeText(codes.join('\n'))}
+            className="mt-3 rounded-xl border border-amber-300 px-3 py-1.5 text-xs font-semibold text-amber-900">
+            Copy all
+          </button>
+        </div>
+      ) : null}
       {secret ? (
         <div className="mt-3 rounded-xl bg-slate-50 p-4 text-sm">
           <p className="font-semibold">Scan into your authenticator app, then confirm:</p>
