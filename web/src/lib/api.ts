@@ -123,6 +123,11 @@ export interface Shipment {
   dwellHours?: number
   expectedDwellHours?: number
   dwellRatio?: number
+  /** shipment_current.updated_at: when the score above was computed. */
+  riskCalculatedAt?: string
+  /** Learned lane p50 in days + sample count (absent below n=5). */
+  laneNormDays?: number
+  laneSamples?: number
   lat?: number
   lng?: number
   /**
@@ -133,8 +138,11 @@ export interface Shipment {
   riskBreakdown?: RiskBreakdown
 }
 
-/** Mirrors readmodel.Breakdown. All values are points contributed, except
- *  valueKnown (whether a cargo value was declared) and relief (negative). */
+/** Mirrors readmodel.Breakdown. Points are what each term contributed;
+ *  evidence fields carry the measurements behind the points (ratio, threshold,
+ *  counts, slip hours) so the UI formats "6d vs 2d norm" without recomputing
+ *  Score's formulas. valueKnown (whether a cargo value was declared) and
+ *  relief (negative) as before. */
 export interface RiskBreakdown {
   dwell: number
   slip: number
@@ -144,6 +152,11 @@ export interface RiskBreakdown {
   value: number
   valueKnown: boolean
   relief: number
+  dwellRatio?: number
+  staleThresholdHours?: number
+  openCritical?: number
+  openOther?: number
+  etaSlipHours?: number
 }
 
 export interface ShipmentEvent {
@@ -230,6 +243,8 @@ export interface Alert {
   // Read-model context so the queue answers "how bad, and is the customer told?"
   riskScore?: number;
   riskTier?: RiskTier;
+  /** Full server explanation (points + evidence) — render Why-this-risk. */
+  riskBreakdown?: RiskBreakdown;
   staleHours?: number;
   openAlertCount?: number;
   customerNotified?: boolean;
@@ -366,6 +381,9 @@ export interface Analytics {
   avgTransitDays?: number
   etaAccuracyPct?: number
   etaSamples?: number
+  /** Share of 30d resolutions that were not false_positive/duplicate. */
+  usefulPct?: number
+  resolutionSamples?: number
   carriers: Array<{ carrier: string; total: number; onTime: number; onTimePct?: number; avgTransitDays?: number }>
   lanes: Array<{ origin: string; destination: string; total: number; exceptions: number }>
 }

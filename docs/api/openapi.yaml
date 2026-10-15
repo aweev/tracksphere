@@ -578,9 +578,13 @@ paths:
   /api/v1/analytics:
     get:
       tags: [shipments]
-      summary: On-time %, transit, carrier benchmark, lanes
+      summary: On-time %, transit, carrier benchmark, lanes, calibration
+      description: >
+        usefulPct/resolutionSamples answer "was the engine worth listening
+        to" (30d resolutions excluding false_positive/duplicate); small
+        samples must render as "collecting", never as a quoted percentage.
       responses:
-        '200': { description: Aggregates + carriers + lanes }
+        '200': { description: Aggregates + carriers + lanes + calibration }
 
   /api/v1/carriers:
     get:
@@ -1219,6 +1223,16 @@ components:
         dwellHours: { type: number }
         expectedDwellHours: { type: number }
         dwellRatio: { type: number }
+        riskCalculatedAt:
+          type: string
+          format: date-time
+          description: When the score was computed (read-model write time). Render "recalculated Xm ago".
+        laneNormDays:
+          type: number
+          description: Learned lane p50 in days (exact carrier preferred). Absent below 5 samples.
+        laneSamples:
+          type: integer
+          description: Delivered shipments behind the lane norm. Minimum 5.
         lat: { type: number }
         lng: { type: number }
         riskBreakdown: { $ref: '#/components/schemas/RiskBreakdown' }
@@ -1226,9 +1240,14 @@ components:
     RiskBreakdown:
       type: object
       description: >
-        Per-term score explanation exactly as the server computed it. Render
-        it; never recompute the weights client-side. Absent on rows predating
-        the breakdown column — treat as "not yet computed", not as zero.
+        Per-term score explanation exactly as the server computed it. Points
+        (dwell/slip/stale/critical/alerts/value/relief) sum to the score
+        before rounding and clamping; evidence fields (dwellRatio,
+        staleThresholdHours, openCritical/openOther, etaSlipHours) carry the
+        measurements behind the points so the UI formats "6d vs 2d norm"
+        without recomputing Score's formulas. Render it; never recompute the
+        weights client-side. Absent on rows predating the breakdown column —
+        treat as "not yet computed", not as zero.
       properties:
         dwell: { type: number }
         slip: { type: number }
@@ -1238,6 +1257,11 @@ components:
         value: { type: number }
         valueKnown: { type: boolean }
         relief: { type: number, description: Negative — customer already notified. }
+        dwellRatio: { type: number, description: Dwell over expected (>1 overruns the lane norm). }
+        staleThresholdHours: { type: number, description: Silence budget applied (expected/6, floored at 24h). }
+        openCritical: { type: integer, description: True critical count (terms cap; counts do not). }
+        openOther: { type: integer }
+        etaSlipHours: { type: number }
 
     AlertPage:
       type: object
@@ -1346,6 +1370,7 @@ components:
         lastSeenAt: { type: string, format: date-time, description: Last sweep that confirmed the condition still holds. }
         riskScore: { type: integer }
         riskTier: { $ref: '#/components/schemas/RiskTier' }
+        riskBreakdown: { $ref: '#/components/schemas/RiskBreakdown' }
         staleHours: { type: number }
         openAlertCount: { type: integer }
         customerNotified: { type: boolean }

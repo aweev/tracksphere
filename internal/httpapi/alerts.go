@@ -128,7 +128,7 @@ func (s *Server) listAlertsFiltered(ctx context.Context, tenantID uuid.UUID, sta
 			       a.due_at, a.escalated_at, a.snoozed_until,
 			       a.root_cause, a.note, a.resolution, a.resolved_by, a.value_at_risk,
 			       s.tracking_number, s.status, s.eta,
-			       sc.risk_score, sc.risk_tier, sc.stale_hours,
+			       sc.risk_score, sc.risk_tier, sc.risk_breakdown, sc.stale_hours,
 			       sc.open_alerts, sc.customer_notified,
 			       a.severity_rank, a.id
 			FROM alerts a
@@ -188,6 +188,7 @@ func (s *Server) listAlertsFiltered(ctx context.Context, tenantID uuid.UUID, sta
 			var openAlerts *int
 			var riskScore *int
 			var riskTier *string
+			var breakdown []byte
 			var staleHours *float64
 			var customerNotified *bool
 			var rank int
@@ -198,7 +199,7 @@ func (s *Server) listAlertsFiltered(ctx context.Context, tenantID uuid.UUID, sta
 				&a.DueAt, &a.EscalatedAt, &a.SnoozedUntil,
 				&rootCause, &note, &resolution, &a.ResolvedBy, &a.ValueAtRisk,
 				&a.TrackingNumber, &a.ShipmentStatus, &a.ShipmentETA,
-				&riskScore, &riskTier, &staleHours,
+				&riskScore, &riskTier, &breakdown, &staleHours,
 				&openAlerts, &customerNotified, &rank, &id); err != nil {
 				return err
 			}
@@ -208,6 +209,11 @@ func (s *Server) listAlertsFiltered(ctx context.Context, tenantID uuid.UUID, sta
 			a.RiskScore, a.StaleHours = riskScore, staleHours
 			if riskTier != nil {
 				a.RiskTier = *riskTier
+			}
+			// Same passthrough contract as the shipments list: the queue
+			// renders Why-this-risk from exactly what Score() persisted.
+			if len(breakdown) > 0 {
+				a.RiskBreakdown = append(json.RawMessage(nil), breakdown...)
 			}
 			if customerNotified != nil {
 				a.CustomerNotified = *customerNotified

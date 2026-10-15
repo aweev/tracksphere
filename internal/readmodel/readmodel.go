@@ -49,6 +49,13 @@ type Input struct {
 // once carried two inline copies). Value + ValueKnown mirror the Input: when
 // no cargo value was declared the tooltip says so honestly rather than
 // showing a silent 0/15. Relief is negative by construction.
+//
+// The evidence fields (DwellRatio, StaleThresholdHours, OpenCritical,
+// OpenOther, ETASlipHours) carry the measurements behind the points so the
+// tooltip can say "6d vs 2d norm" and "26h silent vs ~24h expected" WITHOUT
+// recomputing Score's formulas client-side. They are explanation, not terms:
+// the sum property test covers points only (dwell+slip+stale+critical+
+// alerts+value+relief == score before rounding), never these.
 type Breakdown struct {
 	Dwell      float64 `json:"dwell"`
 	Slip       float64 `json:"slip"`
@@ -58,6 +65,18 @@ type Breakdown struct {
 	Value      float64 `json:"value"`
 	ValueKnown bool    `json:"valueKnown"`
 	Relief     float64 `json:"relief"`
+	// Evidence (measurements, not points):
+	// DwellRatio is dwell/expected (>1 overruns the lane norm).
+	DwellRatio float64 `json:"dwellRatio"`
+	// StaleThresholdHours is the silence budget Score() applied: expected/6
+	// floored at 24h. Render it; never re-derive it.
+	StaleThresholdHours float64 `json:"staleThresholdHours"`
+	// OpenCritical/OpenOther are the alert counts behind the alert terms
+	// (capped terms may hide the true count — the tooltip must not).
+	OpenCritical int `json:"openCritical"`
+	OpenOther    int `json:"openOther"`
+	// ETASlipHours is the measured ETA slippage behind the slip term.
+	ETASlipHours float64 `json:"etaSlipHours"`
 }
 
 // Weights. Deliberately bounded and documented: an unexplainable score is worse
@@ -91,6 +110,7 @@ func Score(in Input) (int, string, Breakdown) {
 	// Dwell ratio: 1.0 is on plan, 2.0 is double the expected transit.
 	if in.ExpectedDwellHours > 0 {
 		ratio := in.DwellHours / in.ExpectedDwellHours
+		b.DwellRatio = ratio
 		if ratio > 1 {
 			b.Dwell = math.Min((ratio-1)*wDwellMax, wDwellMax)
 			score += b.Dwell
@@ -106,6 +126,7 @@ func Score(in Input) (int, string, Breakdown) {
 	}
 
 	if in.ETASlipHours > 0 {
+		b.ETASlipHours = in.ETASlipHours
 		// A two-day slip saturates the term; beyond that, more delay does not
 		// make the row more urgent than an active exception.
 		b.Slip = math.Min(in.ETASlipHours/48*wSlipMax, wSlipMax)
@@ -123,6 +144,7 @@ func Score(in Input) (int, string, Breakdown) {
 		if threshold < 24 {
 			threshold = 24
 		}
+		b.StaleThresholdHours = threshold
 		// Silence up to the threshold contributes nothing: an ocean container
 		// with no scan for three days is exactly on plan, and scoring it as
 		// risky teaches operators to ignore the column.
@@ -132,6 +154,8 @@ func Score(in Input) (int, string, Breakdown) {
 		}
 	}
 
+	b.OpenCritical = in.CriticalAlerts
+	b.OpenOther = in.InfoOrWarnAlerts
 	b.Critical = math.Min(float64(in.CriticalAlerts)*wCriticalAlert, 2*wCriticalAlert)
 	b.Alerts = math.Min(float64(in.InfoOrWarnAlerts)*wAlert, 4*wAlert)
 	score += b.Critical + b.Alerts

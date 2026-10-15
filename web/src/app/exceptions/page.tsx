@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useMemo, useState } from 'react';
 import { RequireAuth } from '@/components/RequireAuth';
 import { Card, Empty } from '@/components/ui';
+import { RiskTooltip } from '@/components/RiskTooltip';
 import {
   api,
   authApi,
@@ -206,6 +207,24 @@ function ExceptionsBody() {
     staleTime: 30_000,
   });
 
+  // Calibration, from real closure data (never a static claim): share of
+  // 30d resolutions that were not false positives/duplicates, plus ETA
+  // accuracy. Small samples render as "collecting", never as a percentage
+  // that over-promises.
+  const { data: calibration } = useQuery({
+    queryKey: ['analytics', 'calibration'],
+    queryFn: async () =>
+      (
+        await api.get<{
+          usefulPct?: number;
+          resolutionSamples?: number;
+          etaAccuracyPct?: number;
+          etaSamples?: number;
+        }>('/api/v1/analytics')
+      ).data,
+    staleTime: 300_000,
+  });
+
   const filtered = useMemo(
     () => (alerts ?? []).filter((a) => severity === 'all' || a.severity === severity),
     [alerts, severity],
@@ -243,6 +262,7 @@ function ExceptionsBody() {
               {budget.digestPending > 0 ? ` · ${budget.digestPending} waiting in digest` : ' · digest clear'}
             </p>
           ) : null}
+          <CalibrationLine calibration={calibration} />
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <div className="flex gap-2" role="group" aria-label="Severity filter">
@@ -399,7 +419,25 @@ function ExceptionsBody() {
                       ) : null}
                       <span>{a.kind}</span>
                       <span>{ageLabel(a.detectedAt ?? a.createdAt)}</span>
-                      {a.riskTier && a.riskTier !== 'clear' ? (
+                      {a.riskTier && a.riskTier !== 'clear' && a.riskBreakdown ? (
+                        <RiskTooltip
+                          score={a.riskScore ?? 0}
+                          breakdown={a.riskBreakdown}
+                          facts={{
+                            staleHours: a.staleHours ?? undefined,
+                            valueAtRisk: a.valueAtRisk,
+                            customerNotified: a.customerNotified,
+                          }}
+                          links={{
+                            timelineHref: `/shipments/${a.shipmentId}#timeline`,
+                            alertsHref: `/shipments/${a.shipmentId}`,
+                          }}
+                        >
+                          <span className="cursor-help font-sans font-bold text-slate-600 underline decoration-dotted underline-offset-2">
+                            {RISK_LABELS[a.riskTier]} ({a.riskScore})
+                          </span>
+                        </RiskTooltip>
+                      ) : a.riskTier && a.riskTier !== 'clear' ? (
                         <span className="font-sans font-bold text-slate-600">
                           {RISK_LABELS[a.riskTier]} ({a.riskScore})
                         </span>
@@ -493,6 +531,41 @@ function ExceptionsBody() {
         </>
       )}
     </div>
+  );
+}
+
+function CalibrationLine({
+  calibration,
+}: {
+  calibration?: {
+    usefulPct?: number;
+    resolutionSamples?: number;
+    etaAccuracyPct?: number;
+    etaSamples?: number;
+  };
+}) {
+  if (!calibration) return null;
+  const resN = calibration.resolutionSamples ?? 0;
+  const etaN = calibration.etaSamples ?? 0;
+  const parts: string[] = [];
+  if (calibration.usefulPct !== undefined && resN >= 10) {
+    parts.push(`Judged useful ${Math.round(calibration.usefulPct)}% (n=${resN}, 30d)`);
+  } else {
+    parts.push(`Collecting calibration data (n=${resN} resolutions)`);
+  }
+  if (calibration.etaAccuracyPct !== undefined && etaN >= 10) {
+    parts.push(`ETA ±6h ${Math.round(calibration.etaAccuracyPct)}% (n=${etaN})`);
+  } else if (etaN > 0) {
+    parts.push(`ETA accuracy collecting (n=${etaN})`);
+  }
+  return (
+    <p
+      className="mt-1 text-xs text-slate-500"
+      role="status"
+      title="From real resolutions and deliveries — small samples say so instead of quoting a percentage."
+    >
+      {parts.join(' · ')}
+    </p>
   );
 }
 

@@ -87,6 +87,18 @@ type Shipment struct {
 	ExpectedDwellHours *float64 `json:"expectedDwellHours,omitempty"`
 	DwellRatio         *float64 `json:"dwellRatio,omitempty"`
 
+	// RiskCalculatedAt is shipment_current.updated_at: when the score above
+	// was computed. The UI renders "recalculated Xm ago" from this — staleness
+	// paranoia dies to a timestamp, not a reassurance.
+	RiskCalculatedAt *time.Time `json:"riskCalculatedAt,omitempty"`
+
+	// LaneNormDays/Samples are the learned lane percentiles behind lane-model
+	// ETAs (lane_stats p50 + sample count, exact carrier match preferred).
+	// Absent below the 5-sample minimum — the UI then says "collecting lane
+	// data", never a made-up norm.
+	LaneNormDays *float64 `json:"laneNormDays,omitempty"`
+	LaneSamples  *int     `json:"laneSamples,omitempty"`
+
 	// Latest known position, from the newest geocoded checkpoint.
 	Lat *float64 `json:"lat,omitempty"`
 	Lng *float64 `json:"lng,omitempty"`
@@ -153,11 +165,15 @@ type Alert struct {
 	ShipmentETA    *time.Time `json:"shipmentEta,omitempty"`
 	// Derived read-model context so the queue can render the seven questions
 	// an exception card must answer without a second round trip.
-	RiskScore       *int     `json:"riskScore,omitempty"`
-	RiskTier        string   `json:"riskTier,omitempty"`
-	StaleHours      *float64 `json:"staleHours,omitempty"`
-	OpenAlertCount  int      `json:"openAlertCount,omitempty"`
-	CustomerNotified bool    `json:"customerNotified,omitempty"`
+	RiskScore      *int            `json:"riskScore,omitempty"`
+	RiskTier       string         `json:"riskTier,omitempty"`
+	// RiskBreakdown is the full server explanation (points + evidence).
+	// The exception queue renders Why-this-risk from this, never from the
+	// score alone.
+	RiskBreakdown    json.RawMessage `json:"riskBreakdown,omitempty"`
+	StaleHours       *float64        `json:"staleHours,omitempty"`
+	OpenAlertCount   int             `json:"openAlertCount,omitempty"`
+	CustomerNotified bool            `json:"customerNotified,omitempty"`
 }
 
 // User is the authenticated principal.

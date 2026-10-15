@@ -280,7 +280,22 @@ function ShipmentsBody() {
                     .map((s) => (
                       <tr key={s.id} className="hover:bg-slate-50">
                         <td className="py-3 pr-4">
-                          <RiskTooltip score={s.riskScore ?? 0} breakdown={s.riskBreakdown ?? EMPTY_BREAKDOWN}>
+                          <RiskTooltip
+                            score={s.riskScore ?? 0}
+                            breakdown={s.riskBreakdown ?? EMPTY_BREAKDOWN}
+                            facts={{
+                              dwellHours: s.dwellHours,
+                              expectedDwellHours: s.expectedDwellHours,
+                              staleHours: s.staleHours,
+                              valueAtRisk: s.valueAtRisk,
+                              customerNotified: s.customerNotified,
+                              recalculatedAt: s.riskCalculatedAt,
+                            }}
+                            links={{
+                              timelineHref: `/shipments/${s.id}#timeline`,
+                              alertsHref: `/exceptions`,
+                            }}
+                          >
                             <RiskBadge
                               tier={s.riskTier as 'critical' | 'at_risk' | 'watch' | 'clear' ?? 'clear'}
                               score={s.riskScore ?? 0}
@@ -311,7 +326,14 @@ function ShipmentsBody() {
                           {s.eta ? (
                             <>
                               {new Date(s.eta).toLocaleString()}
-                              <EtaBadge source={s.etaSource} confidence={s.etaConfidence} />
+                              <EtaBadge
+                                source={s.etaSource}
+                                confidence={s.etaConfidence}
+                                laneNormDays={s.laneNormDays}
+                                laneSamples={s.laneSamples}
+                                origin={s.origin}
+                                destination={s.destination}
+                              />
                             </>
                           ) : (
                             <span className="font-sans text-xs">No ETA yet</span>
@@ -342,7 +364,22 @@ function ShipmentsBody() {
                         </Link>
                         {s.reference && <div className="text-xs text-slate-400">{s.reference}</div>}
                       </div>
-<RiskTooltip score={s.riskScore ?? 0} breakdown={s.riskBreakdown ?? EMPTY_BREAKDOWN}>
+<RiskTooltip
+  score={s.riskScore ?? 0}
+  breakdown={s.riskBreakdown ?? EMPTY_BREAKDOWN}
+  facts={{
+    dwellHours: s.dwellHours,
+    expectedDwellHours: s.expectedDwellHours,
+    staleHours: s.staleHours,
+    valueAtRisk: s.valueAtRisk,
+    customerNotified: s.customerNotified,
+    recalculatedAt: s.riskCalculatedAt,
+  }}
+  links={{
+    timelineHref: `/shipments/${s.id}#timeline`,
+    alertsHref: `/exceptions`,
+  }}
+>
                         <RiskBadge
                           tier={s.riskTier as 'critical' | 'at_risk' | 'watch' | 'clear' ?? 'clear'}
                           score={s.riskScore ?? 0}

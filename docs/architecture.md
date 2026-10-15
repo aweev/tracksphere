@@ -97,6 +97,14 @@ Notable choices:
 - `webhook_inbox.shipment_id` has **no FK** - the audit trail must outlive
   shipments and stay writable for payloads that never resolve.
 - `jobs` is both the work queue and the schedule (delay via `run_at`).
+- `shipment_current` is the read model and the score's home: `risk_score`,
+  `risk_tier`, `risk_breakdown` (points + evidence, see `readmodel.Score`),
+  `updated_at` (surfaced as `riskCalculatedAt` — "recalculated Xm ago").
+  `GET /shipments/{id}` returns the joined row, so detail renders the same
+  explanation as the list; `GET /alerts` carries the row's breakdown too.
+- `lane_stats` (tenant, origin, destination, carrier, mode; min 5 samples)
+  backs lane-model ETAs and the `norm 18d · n=42` chip via the same lookup
+  the estimator uses — never a second computation.
 
 ## 5. Security posture
 

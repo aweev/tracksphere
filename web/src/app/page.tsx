@@ -188,6 +188,18 @@ function DashboardBody() {
                               <RiskTooltip
                                 score={s.riskScore ?? 0}
                                 breakdown={s.riskBreakdown ?? EMPTY_BREAKDOWN}
+                                facts={{
+                                  dwellHours: s.dwellHours,
+                                  expectedDwellHours: s.expectedDwellHours,
+                                  staleHours: s.staleHours,
+                                  valueAtRisk: s.valueAtRisk,
+                                  customerNotified: s.customerNotified,
+                                  recalculatedAt: s.riskCalculatedAt,
+                                }}
+                                links={{
+                                  timelineHref: `/shipments/${s.id}#timeline`,
+                                  alertsHref: `/exceptions`,
+                                }}
                               >
                                 <span
                                   className={`cursor-help rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide underline decoration-dotted underline-offset-2 ${RISK_STYLES[tier]}`}
@@ -216,7 +228,14 @@ function DashboardBody() {
                                 <span className="font-mono">
                                   {new Date(s.eta).toLocaleDateString()}
                                 </span>
-                                <EtaBadge source={s.etaSource} confidence={s.etaConfidence} />
+                                <EtaBadge
+                                  source={s.etaSource}
+                                  confidence={s.etaConfidence}
+                                  laneNormDays={s.laneNormDays}
+                                  laneSamples={s.laneSamples}
+                                  origin={s.origin}
+                                  destination={s.destination}
+                                />
                               </>
                             ) : (
                               ' · No ETA yet'

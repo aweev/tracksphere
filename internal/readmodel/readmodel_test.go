@@ -176,3 +176,59 @@ func TestScore_UnknownValueContributesNothing(t *testing.T) {
 		t.Fatalf("unflagged value must not score: %d/%v", unflagged, bUnflagged.Value)
 	}
 }
+
+func TestScore_NegativeFloor(t *testing.T) {
+	// Relief (-10) on an otherwise clean shipment must floor at 0, never go
+	// negative: a negative "risk" would invert every ordering that sorts by
+	// the score.
+	score, tier, b := Score(Input{Status: "in_transit", CustomerNotified: true})
+	if score != 0 {
+		t.Fatalf("relief-only score = %d, want 0", score)
+	}
+	if tier != "clear" {
+		t.Fatalf("tier = %q, want clear", tier)
+	}
+	if b.Relief != -10 {
+		t.Fatalf("relief = %v, want -10", b.Relief)
+	}
+}
+
+func TestScore_EvidenceTravelsWithPoints(t *testing.T) {
+	// The breakdown must carry the measurements behind the points, so the UI
+	// can say "6d vs 2d norm" without recomputing Score's formulas. Evidence
+	// fields are not terms: they must never enter the sum property.
+	in := Input{
+		Status: "in_transit", DwellHours: 72, ExpectedDwellHours: 48,
+		ETASlipHours: 12, StaleHours: 50, CriticalAlerts: 1, InfoOrWarnAlerts: 2,
+		ValueAtRisk: 20000, ValueKnown: true,
+	}
+	score, _, b := Score(in)
+	if b.DwellRatio != 1.5 {
+		t.Fatalf("DwellRatio = %v, want 1.5", b.DwellRatio)
+	}
+	if b.StaleThresholdHours != 24 {
+		t.Fatalf("StaleThresholdHours = %v, want floor 24 (48/6=8 < 24)", b.StaleThresholdHours)
+	}
+	if b.OpenCritical != 1 || b.OpenOther != 2 {
+		t.Fatalf("alert counts = %d/%d, want 1/2", b.OpenCritical, b.OpenOther)
+	}
+	if b.ETASlipHours != 12 {
+		t.Fatalf("ETASlipHours = %v, want 12", b.ETASlipHours)
+	}
+	sum := b.Dwell + b.Slip + b.Stale + b.Critical + b.Alerts + b.Value + b.Relief
+	if int(sum+0.5) != score {
+		t.Fatalf("breakdown sums to %.1f but score is %d", sum, score)
+	}
+}
+
+func TestScore_CappedTermsKeepTrueCounts(t *testing.T) {
+	// 3 criticals saturate the term at 2×15, but the tooltip must say
+	// "3 critical", not "2" — caps hide urgency, counts must not.
+	_, _, b := Score(Input{Status: "in_transit", CriticalAlerts: 3})
+	if b.Critical != 30 {
+		t.Fatalf("Critical = %v, want capped 30", b.Critical)
+	}
+	if b.OpenCritical != 3 {
+		t.Fatalf("OpenCritical = %d, want true count 3", b.OpenCritical)
+	}
+}

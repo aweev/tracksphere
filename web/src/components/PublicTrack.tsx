@@ -9,6 +9,7 @@ import { ConnectionDot } from '@/components/ConnectionDot';
 import { useTrackedStream } from '@/lib/live';
 import { Timeline } from '@/components/Timeline';
 import { api, RequestError, type PublicTracking } from '@/lib/api';
+import { relativeTime } from '@/lib/format';
 
 /** Customer-facing tracker: no login, safe projection from the API only. */
 export function PublicTrack({ initial }: { initial: string }) {
@@ -133,7 +134,20 @@ export function PublicTrack({ initial }: { initial: string }) {
               </div>
             ) : (
               <div className="mt-3 rounded-xl bg-slate-50 p-3 text-sm text-slate-600">
-                No arrival date yet — we show it here as soon as the carrier publishes one.
+                {(() => {
+                  const last = data.events[data.events.length - 1];
+                  const when = data.lastUpdate ? relativeTime(data.lastUpdate) : null;
+                  const where = last?.location ? ` at ${last.location}` : '';
+                  // Ambiguity aversion: "No ETA yet — last ping 4h ago at
+                  // Rotterdam" instead of "—". lastUpdate is the last carrier
+                  // signal we actually hold; the tail checkpoint names it.
+                  return (
+                    <>
+                      No ETA yet{when ? ` — last ping ${when}${where}` : ''} — we
+                      show a date here as soon as the carrier publishes one.
+                    </>
+                  );
+                })()}
               </div>
             )}
           </Card>

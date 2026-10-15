@@ -133,6 +133,15 @@ function ShipmentDetailBody({ id }: { id: string }) {
             <RiskTooltip
               score={shipment.riskScore}
               breakdown={shipment.riskBreakdown ?? EMPTY_BREAKDOWN}
+              facts={{
+                dwellHours: shipment.dwellHours,
+                expectedDwellHours: shipment.expectedDwellHours,
+                staleHours: shipment.staleHours,
+                valueAtRisk: shipment.valueAtRisk,
+                customerNotified: shipment.customerNotified,
+                recalculatedAt: shipment.riskCalculatedAt,
+              }}
+              links={{ timelineHref: '#timeline', alertsHref: '/exceptions' }}
             >
               <span
                 className="inline-block cursor-help rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-navy-950 underline decoration-dotted underline-offset-2"
@@ -147,7 +156,14 @@ function ShipmentDetailBody({ id }: { id: string }) {
               <div className="text-xs uppercase tracking-wide text-slate-500">ETA</div>
               <div className="font-mono text-sm font-semibold text-navy-950">
                 {new Date(shipment.eta).toLocaleString()}
-                <EtaBadge source={shipment.etaSource} confidence={shipment.etaConfidence} />
+                <EtaBadge
+                  source={shipment.etaSource}
+                  confidence={shipment.etaConfidence}
+                  laneNormDays={shipment.laneNormDays}
+                  laneSamples={shipment.laneSamples}
+                  origin={shipment.origin}
+                  destination={shipment.destination}
+                />
               </div>
               <div className="text-xs text-slate-600">{relativeTime(shipment.eta)}</div>
             </div>
@@ -166,13 +182,15 @@ function ShipmentDetailBody({ id }: { id: string }) {
           <Card title="Route map">
             <ShipmentMap points={points} />
           </Card>
-          <Card title="Timeline">
-            {events && events.length > 0 ? (
-              <Timeline events={events} />
-            ) : (
-              <Empty message="No events yet." />
-            )}
-          </Card>
+          <div id="timeline" className="scroll-mt-4">
+            <Card title="Timeline">
+              {events && events.length > 0 ? (
+                <Timeline events={events} />
+              ) : (
+                <Empty message="No events yet." />
+              )}
+            </Card>
+          </div>
         </div>
 
         <div className="space-y-6">

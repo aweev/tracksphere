@@ -1,9 +1,12 @@
 package httpapi
 
 import (
+	"context"
 	"net/http"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/tracksphere/tracksphere/internal/db"
 	"github.com/tracksphere/tracksphere/internal/workers"
@@ -139,11 +142,34 @@ if err := tx.QueryRow(r.Context(), `
 		p := float64(accurate) / float64(etaSamples) * 100
 		etaAccuracy = &p
 	}
+	usefulPct, resolutionSamples := resolutionUsefulness(r.Context(), s.pool, user.TenantID)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"total": total, "delivered": delivered,
 		"onTime": onTime, "onTimePct": onTimePct,
 		"exceptions": exceptions, "avgTransitDays": avgDays,
 		"etaAccuracyPct": etaAccuracy, "etaSamples": etaSamples,
+		"usefulPct": usefulPct, "resolutionSamples": resolutionSamples,
 		"carriers": carriers, "lanes": lanes,
 	})
+}
+
+// resolutionUsefulness answers "was the exception engine worth listening to"
+// from real closure data: share of alerts resolved in the last 30 days whose
+// resolution was NOT a false positive or duplicate. Nil-safe: returns
+// (nil, 0) when nothing resolved yet, which the UI renders as "collecting
+// calibration data", never a made-up percentage.
+func resolutionUsefulness(ctx context.Context, pool *pgxpool.Pool, tenantID uuid.UUID) (*float64, int64) {
+	var total, useful int64
+	err := db.WithTenant(ctx, pool, tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `
+			SELECT count(*),
+			       count(*) FILTER (WHERE resolution NOT IN ('false_positive','duplicate'))
+			FROM alerts
+			WHERE status='resolved' AND resolved_at > now() - interval '30 days'`).Scan(&total, &useful)
+	})
+	if err != nil || total == 0 {
+		return nil, total
+	}
+	p := float64(useful) / float64(total) * 100
+	return &p, total
 }

@@ -123,17 +123,30 @@ func (r *Repository) Create(ctx context.Context, tenantID, userID uuid.UUID, in 
 	return out, err
 }
 
-// Get fetches one shipment inside a tenant.
+// Get fetches one shipment inside a tenant — WITH its read model, lane norm
+// and position, exactly like a one-row List. The old Get returned the bare
+// shipments row, so the detail page (the screen where the score matters most)
+// could never render Why-this-risk: riskScore was always absent there.
 func (r *Repository) Get(ctx context.Context, tenantID, id uuid.UUID) (*model.Shipment, error) {
 	var out *model.Shipment
 	err := db.WithTenant(ctx, r.pool, tenantID, func(tx pgx.Tx) error {
-		s, err := scanShipment(tx.QueryRow(ctx,
-			`SELECT `+shipmentCols+` FROM shipments WHERE id=$1`, id))
+		rs, err := tx.Query(ctx, listSelect+` WHERE s.id=$1`, id)
 		if err != nil {
 			return err
 		}
+		defer rs.Close()
+		if !rs.Next() {
+			rs.Close()
+			return ErrNotFound
+		}
+		s, err := scanListRow(rs)
+		if err != nil {
+			rs.Close()
+			return err
+		}
+		rs.Close()
 		out = s
-		return nil
+		return rs.Err()
 	})
 	return out, err
 }

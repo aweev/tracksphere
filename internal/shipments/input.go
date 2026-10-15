@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -33,13 +34,18 @@ type ListInput struct {
 
 // listSelect joins the read model so the list carries the risk score, staleness,
 // ETA provenance and customer-notified flag without a per-row subquery.
+// Lane norm joins mirror intel.LaneStatsFor (exact carrier first, then
+// carrier-agnostic, minimum 5 samples): the ETA badge's "lane norm 18d, n=42"
+// line reads the same row the estimator used, not a second computation.
 const listSelect = `
 	SELECT s.id, s.tenant_id, s.tracking_number, s.reference, s.carrier, s.mode,
 	       s.origin, s.destination, s.status, s.eta, s.shipped_at, s.delivered_at,
 	       s.is_public, s.created_at, s.updated_at,
 	       c.risk_score, c.risk_tier, c.risk_breakdown, c.stale_hours, c.open_alerts, c.critical_alerts,
 	       c.eta_source, c.eta_confidence, c.value_at_risk, c.customer_notified,
-	       c.dwell_hours, c.expected_dwell_hours, c.dwell_ratio,
+	       c.dwell_hours, c.expected_dwell_hours, c.dwell_ratio, c.updated_at,
+	       COALESCE(ln_exact.p50_days, ln_any.p50_days),
+	       COALESCE(ln_exact.samples, ln_any.samples),
 	       (SELECT e.lat FROM shipment_events e
 	         WHERE e.shipment_id = s.id AND e.lat IS NOT NULL AND e.lng IS NOT NULL
 	         ORDER BY e.occurred_at DESC LIMIT 1),
@@ -47,7 +53,15 @@ const listSelect = `
 	         WHERE e.shipment_id = s.id AND e.lat IS NOT NULL AND e.lng IS NOT NULL
 	         ORDER BY e.occurred_at DESC LIMIT 1)
 	FROM shipments s
-	LEFT JOIN shipment_current c ON c.shipment_id = s.id`
+	LEFT JOIN shipment_current c ON c.shipment_id = s.id
+	LEFT JOIN lane_stats ln_exact ON ln_exact.tenant_id = s.tenant_id
+		AND ln_exact.origin = s.origin AND ln_exact.destination = s.destination
+		AND ln_exact.carrier = s.carrier AND ln_exact.mode = s.mode
+		AND ln_exact.samples >= 5 AND ln_exact.p50_days > 0
+	LEFT JOIN lane_stats ln_any ON ln_any.tenant_id = s.tenant_id
+		AND ln_any.origin = s.origin AND ln_any.destination = s.destination
+		AND ln_any.carrier = '' AND ln_any.mode = s.mode
+		AND ln_any.samples >= 5 AND ln_any.p50_days > 0`
 
 func scanListRow(rs pgx.Rows) (*model.Shipment, error) {
 	var s model.Shipment
@@ -61,12 +75,16 @@ func scanListRow(rs pgx.Rows) (*model.Shipment, error) {
 	var breakdown []byte
 	var staleHours, valueAtRisk *float64
 	var customerNotified *bool
+	var riskCalculatedAt *time.Time
+	var laneNormDays *float64
+	var laneSamples *int
 	if err := rs.Scan(&s.ID, &s.TenantID, &s.TrackingNumber, &s.Reference,
 		&s.Carrier, &s.Mode, &s.Origin, &s.Destination, &s.Status, &s.ETA,
 		&s.ShippedAt, &s.DeliveredAt, &s.IsPublic, &s.CreatedAt, &s.UpdatedAt,
 		&riskScore, &riskTier, &breakdown, &staleHours, &openAlerts, &criticalAlerts,
 		&etaSource, &s.ETAConfidence, &valueAtRisk, &customerNotified,
-		&s.DwellHours, &s.ExpectedDwellHours, &s.DwellRatio,
+		&s.DwellHours, &s.ExpectedDwellHours, &s.DwellRatio, &riskCalculatedAt,
+		&laneNormDays, &laneSamples,
 		&s.Lat, &s.Lng); err != nil {
 		return nil, err
 	}
@@ -76,6 +94,7 @@ func scanListRow(rs pgx.Rows) (*model.Shipment, error) {
 	s.RiskScore, s.RiskTier, s.StaleHours = riskScore, riskTier, staleHours
 	s.OpenAlerts, s.CriticalAlerts = openAlerts, criticalAlerts
 	s.ValueAtRisk, s.CustomerNotified = valueAtRisk, customerNotified
+	s.RiskCalculatedAt, s.LaneNormDays, s.LaneSamples = riskCalculatedAt, laneNormDays, laneSamples
 	// Passthrough of exactly what Score() computed. '{}' (rows predating the
 	// column or never refreshed) decodes to a zero breakdown, which renders
 	// as "no risk factors" — honest for a row with no computed terms.
