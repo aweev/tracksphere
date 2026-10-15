@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -162,11 +163,17 @@ func recipientHash(recipient string) string {
 }
 
 // HandleAlertNotify routes an ops notification for a newly raised exception.
+//
+// Transaction discipline: the tenant transaction is DB-ONLY (budget ledger,
+// digest queue, audit claims). Provider Sends happen AFTER commit via
+// flushSends — no transaction ever spans network I/O. A retry re-claims:
+// transmitted rows are skipped, untransmitted rows are re-owned.
 func HandleAlertNotify(pool *pgxpool.Pool, log *slog.Logger) func(context.Context, []byte) error {
 	return func(ctx context.Context, body []byte) error {
 		var p struct {
 			TenantID   string `json:"tenantId"`
 			ShipmentID string `json:"shipmentId"`
+			AlertID    string `json:"alertId"`
 			Severity   string `json:"severity"`
 			Interrupt  bool   `json:"interrupt"`
 			Kind       string `json:"kind"`
@@ -182,7 +189,11 @@ func HandleAlertNotify(pool *pgxpool.Pool, log *slog.Logger) func(context.Contex
 		if err != nil {
 			return nil
 		}
+		// alertId keys idempotency; jobs enqueued before it existed fall back
+		// to the message text (same retry semantics, coarser grain).
+		alertID := strings.ReplaceAll(p.AlertID, "-", "")
 
+		var sends []pendingSend
 		var shipped int
 		err = db.WithTenant(ctx, pool, tenantID, func(tx pgx.Tx) error {
 			prefs := loadPrefs(ctx, tx, tenantID)
@@ -234,6 +245,18 @@ func HandleAlertNotify(pool *pgxpool.Pool, log *slog.Logger) func(context.Contex
 
 			for _, t := range targets {
 				rhash := recipientHash(t.email)
+				// Slice 5 — close the budget race. count-then-insert without
+				// mutual exclusion lets N concurrent alert.notify workers
+				// all read thisHour=4 and all interrupt: cap overrun with
+				// no DB constraint to catch it. A transaction-scoped
+				// advisory lock per (tenant, recipient) serializes the
+				// check+insert across replicas; it auto-releases on
+				// commit/rollback, so a crashed holder blocks nobody.
+				// Namespace 787312097 = 'ts.notify' hashed once, offline.
+				if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(787312097, hashtext($1))`,
+					tenantID.String()+":"+rhash); err != nil {
+					return err
+				}
 				var thisHour int
 				if err := tx.QueryRow(ctx, `
 					SELECT count(*) FROM notification_interrupts
@@ -250,23 +273,52 @@ func HandleAlertNotify(pool *pgxpool.Pool, log *slog.Logger) func(context.Contex
 
 				route := DecideRoute(severity, p.Interrupt, prefs, loc, now, thisHour, lastShip)
 				if route.Interrupt {
-					if err := deliver(ctx, tx, log, tenantID, shipmentID, "email",
-						t.email, rhash, subject, bodyText, severity, p.Kind, route.Reason); err != nil {
+					// Metered-channel kill-switch (P2-4): fail closed. A
+					// disabled channel skips THIS recipient and continues
+					// with the rest — the old code aborted the whole batch
+					// (return err), which poison-retried a permanent
+					// condition forever.
+					if !meteredAllowed(ctx, tx, tenantID, "email") {
+						metrics.NotificationsFailedTotal.WithLabelValues("email", tenantID.String(), "metered_disabled").Inc()
+						continue
+					}
+					sender := notify.ForChannel(log, "email")
+					key := alertID
+					if key == "" {
+						key = sendKey("alert.notify", tenantID.String(), shipmentID.String(),
+							t.email, p.Kind, subject, bodyText)
+					} else {
+						key = sendKey("alert.notify", tenantID.String(), key, t.email)
+					}
+					ps := pendingSend{
+						TenantID: tenantID, ShipmentID: shipmentID,
+						Channel: "email", To: t.email,
+						Subject: subject, Body: bodyText,
+						Provider: sender.Name(), DedupeKey: key,
+					}
+					owned, fresh, err := claimSendTx(ctx, tx, ps)
+					if err != nil {
 						return err
 					}
-					// Record the interrupt so the ledger enforces the ceiling
-					// for the next sender in this same sweep pass.
-					if _, err := tx.Exec(ctx, `
-					INSERT INTO notification_interrupts
-						(tenant_id, recipient_hash, shipment_id, alert_id, severity)
-					VALUES ($1,$2,$3,NULL,$4)`, tenantID, rhash, shipmentID, severity); err != nil {
-						return err
+					if owned {
+						sends = append(sends, ps)
 					}
-					metrics.InterruptsSentTotal.WithLabelValues(tenantID.String(), severity).Inc()
-					shipped++
+					// The ledger enforces the ceiling for the next sender in
+					// this same sweep pass — but only on fresh claims. A
+					// retry re-owning an unsent row must not double-count.
+					if fresh {
+						if _, err := tx.Exec(ctx, `
+						INSERT INTO notification_interrupts
+							(tenant_id, recipient_hash, shipment_id, alert_id, severity)
+						VALUES ($1,$2,$3,NULL,$4)`, tenantID, rhash, shipmentID, severity); err != nil {
+							return err
+						}
+						metrics.InterruptsSentTotal.WithLabelValues(tenantID.String(), severity).Inc()
+						shipped++
+					}
 				} else {
-					if err := queueDigest(ctx, tx, tenantID, rhash, shipmentID,
-						severity, subject, bodyText, route.Reason); err != nil {
+					if err := queueDigest(ctx, tx, tenantID, t.email, rhash, shipmentID,
+						severity, p.Kind, subject, bodyText, route.Reason); err != nil {
 						return err
 					}
 					metrics.InterruptsQueuedTotal.WithLabelValues(tenantID.String(), route.Reason).Inc()
@@ -275,16 +327,22 @@ func HandleAlertNotify(pool *pgxpool.Pool, log *slog.Logger) func(context.Contex
 
 			// Customer-facing side: only critical and warning ever tell a
 			// customer, and only subscribers who actually confirmed consent.
+			// Claims are collected here and transmitted after commit.
 			_, queueCustomer := severityPolicy(severity)
 			if queueCustomer {
 				if err := notifySubscribers(ctx, tx, log, tenantID, shipmentID,
-					tracking, severity, title, message); err != nil {
+					tracking, severity, title, message, &sends); err != nil {
 					log.Warn("customer notification fan-out", "err", err)
 				}
 			}
 			return nil
 		})
 		if err != nil {
+			return err
+		}
+		// Post-commit: transmit everything claimed. No transaction spans
+		// network I/O anymore; retries re-claim (sent rows skipped).
+		if err := flushSends(ctx, pool, log, sends); err != nil {
 			return err
 		}
 		log.Info("alert notification routed", "tenant", tenantID,
@@ -310,51 +368,28 @@ func dashboardURL(tenantID, shipmentID uuid.UUID) string {
 	return fmt.Sprintf("/shipments/%s", shipmentID)
 }
 
-// deliver writes the audit row and sends through the provider.
-func deliver(ctx context.Context, tx pgx.Tx, log *slog.Logger, tenantID, shipmentID uuid.UUID, channel, to, rhash, subject, body, severity, kind, reason string) error {
-	// Metered-channel kill-switch (P2-4): fail closed so no Twilio spend and
-	// no consent exposure happens without an explicit tenant opt-in. The
-	// caller treats this like a send failure (warn + continue, no ledger row).
-	if !meteredAllowed(ctx, tx, tenantID, channel) {
-		metrics.NotificationsFailedTotal.WithLabelValues(channel, tenantID.String(), "metered_disabled").Inc()
-		return fmt.Errorf("metered channel %q disabled for tenant", channel)
-	}
-	sender := notify.ForChannel(log, channel)
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO notifications (tenant_id, shipment_id, channel, recipient, subject, body, provider)
-		VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-		tenantID, shipmentID, channel, to, subject, body, sender.Name()); err != nil {
-		return err
-	}
-	// Send AFTER the row so a provider failure leaves an auditable record
-	// rather than a silent loss.
-	metrics.NotificationsAttemptedTotal.WithLabelValues(channel, tenantID.String()).Inc()
-	if err := sender.Send(ctx, channel, to, subject, body); err != nil {
-		metrics.NotificationsFailedTotal.WithLabelValues(channel, tenantID.String(), "send_failed").Inc()
-		return err
-	}
-	metrics.NotificationsSentTotal.WithLabelValues(channel, tenantID.String()).Inc()
-	return nil
-}
-
 // queueDigest defers a non-interrupting notification into the digest queue.
-// Suppressing noise must never mean losing information.
-func queueDigest(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID, rhash string, shipmentID uuid.UUID, severity, subject, body, reason string) error {
+// Suppressing noise must never mean losing information. The recipient
+// address is stored alongside its hash: the hash drives the hourly ledger
+// lookup, the address drives delivery (a hash is not deliverable).
+func queueDigest(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID, recipient, rhash string, shipmentID uuid.UUID, severity, kind, subject, body, reason string) error {
 	_, err := tx.Exec(ctx, `
 		INSERT INTO notification_digest_queue
-			(tenant_id, recipient_hash, shipment_id, severity, subject, body)
-		VALUES ($1,$2,$3,$4,$5,$6)`,
-		tenantID, rhash, shipmentID, severity, subject,
+			(tenant_id, recipient_hash, recipient, shipment_id, severity, kind, subject, body)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+		tenantID, rhash, recipient, shipmentID, severity, kind, subject,
 		body+"\n\n(routed to digest: "+reason+")")
 	return err
 }
 
-// notifySubscribers sends to confirmed, active subscribers only.
+// notifySubscribers claims customer messages for confirmed, active
+// subscribers only. Claims append to sends for post-commit transmission;
+// the consent + customer_notified writes stay in-transaction (DB-only).
 //
 // 'pending' rows exist purely as an un-consented intent record and are never
 // deliverable — that is the whole point of the double opt-in. digest_only
 // subscribers wait for the digest.
-func notifySubscribers(ctx context.Context, tx pgx.Tx, log *slog.Logger, tenantID, shipmentID uuid.UUID, tracking, severity, title, message string) error {
+func notifySubscribers(ctx context.Context, tx pgx.Tx, log *slog.Logger, tenantID, shipmentID uuid.UUID, tracking, severity, title, message string, sends *[]pendingSend) error {
 	rows, err := tx.Query(ctx, `
 		SELECT channel, recipient FROM tracking_subscriptions
 		WHERE shipment_id=$1 AND status='active' AND NOT digest_only`, shipmentID)
@@ -377,16 +412,27 @@ func notifySubscribers(ctx context.Context, tx pgx.Tx, log *slog.Logger, tenantI
 	}
 	subject := fmt.Sprintf("%s: %s is %s", tracking, tracking, severity)
 	body := fmt.Sprintf("%s\n\n%s", title, message)
-	sent := 0
+	claimed := 0
 	for _, v := range subs {
-		if err := deliver(ctx, tx, log, tenantID, shipmentID, v.channel, v.to,
-			recipientHash(v.to), subject, body, severity, "customer", "subscriber"); err != nil {
-			// One failed recipient must not stop the rest, and must not fail
-			// the job: the customer notification is best-effort by design.
-			log.Warn("customer notification failed",
+		// Best-effort per recipient: one bad claim must not stop the rest.
+		sender := notify.ForChannel(log, v.channel)
+		ps := pendingSend{
+			TenantID: tenantID, ShipmentID: shipmentID,
+			Channel: v.channel, To: v.to,
+			Subject: subject, Body: body, Provider: sender.Name(),
+			DedupeKey: sendKey("customer", tenantID.String(), shipmentID.String(),
+				v.channel, v.to, subject, body),
+		}
+		owned, _, err := claimSendTx(ctx, tx, ps)
+		if err != nil {
+			log.Warn("customer notification claim failed",
 				"channel", v.channel, "err", err)
 			continue
 		}
+		if !owned {
+			continue // already transmitted by an earlier attempt
+		}
+		*sends = append(*sends, ps)
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO notification_consent
 				(tenant_id, shipment_id, channel, recipient, recipient_hash, action)
@@ -394,9 +440,9 @@ func notifySubscribers(ctx context.Context, tx pgx.Tx, log *slog.Logger, tenantI
 			tenantID, shipmentID, v.channel, v.to, recipientHash(v.to)); err != nil {
 			return err
 		}
-		sent++
+		claimed++
 	}
-	if sent > 0 {
+	if claimed > 0 {
 		if _, err := tx.Exec(ctx,
 			`UPDATE shipment_current SET customer_notified=true WHERE shipment_id=$1`, shipmentID); err != nil {
 			return err
@@ -417,6 +463,7 @@ func HandleFlushDigests(pool *pgxpool.Pool, log *slog.Logger) func(context.Conte
 		var batches []struct {
 			tenant uuid.UUID
 			rhash  string
+			email  string
 			count  int
 			kinds  int
 		}
@@ -428,14 +475,15 @@ func HandleFlushDigests(pool *pgxpool.Pool, log *slog.Logger) func(context.Conte
 			_ = tx.Rollback(ctx)
 			return err
 		}
+		// Only rows with a stored recipient are deliverable. Pre-migration
+		// rows carry a hash alone (undeliverable by design) and are skipped
+		// fail-closed — never sent to a hash.
 		rows, err := tx.Query(ctx, `
-			SELECT tenant_id, recipient_hash, count(*), count(DISTINCT kind)
-			FROM (
-			  SELECT q.tenant_id, q.recipient_hash, q.created_at,
-			         split_part(q.subject, ' ', 1) AS kind
-			  FROM notification_digest_queue q
-			  WHERE q.flushed_at IS NULL AND q.created_at < now() - interval '15 minutes'
-			) t
+			SELECT tenant_id, recipient_hash, min(recipient), count(*), count(DISTINCT kind)
+			FROM notification_digest_queue
+			WHERE flushed_at IS NULL
+			  AND created_at < now() - interval '15 minutes'
+			  AND recipient IS NOT NULL
 			GROUP BY tenant_id, recipient_hash
 			LIMIT 500`)
 		if err != nil {
@@ -446,10 +494,11 @@ func HandleFlushDigests(pool *pgxpool.Pool, log *slog.Logger) func(context.Conte
 			var b struct {
 				tenant uuid.UUID
 				rhash  string
+				email  string
 				count  int
 				kinds  int
 			}
-			if err := rows.Scan(&b.tenant, &b.rhash, &b.count, &b.kinds); err != nil {
+			if err := rows.Scan(&b.tenant, &b.rhash, &b.email, &b.count, &b.kinds); err != nil {
 				rows.Close()
 				_ = tx.Rollback(ctx)
 				return err
@@ -466,37 +515,81 @@ func HandleFlushDigests(pool *pgxpool.Pool, log *slog.Logger) func(context.Conte
 		}
 
 		for _, b := range batches {
+			// Claim-then-send: stamp flushed_at FIRST so a concurrent flush
+			// replica cannot claim the same rows (the UPDATE is the mutex),
+			// transmit AFTER commit, and release the claim (flushed_at=NULL)
+			// if transmission fails — so a failed digest stays pending for
+			// the next flush instead of being marked delivered-but-lost.
+			// Claimed row IDs travel with the batch: the release touches
+			// ONLY rows this attempt claimed, never digests an earlier run
+			// already delivered. No transaction spans network I/O.
+			var subject, body string
+			var claimedIDs []int64
 			if err := db.WithTenant(ctx, pool, b.tenant, func(tx pgx.Tx) error {
 				// Grouped, not enumerated: one digest that says how many, not
 				// one message per event.
-				subject := fmt.Sprintf("TrackSphere digest: %d updates across %d categories", b.count, b.kinds)
+				subject = fmt.Sprintf("TrackSphere digest: %d updates across %d categories", b.count, b.kinds)
 				queueURL := publicBaseURL() + "/exceptions"
 				if publicBaseURL() == "" {
 					queueURL = "/exceptions"
 				}
-				body := fmt.Sprintf(
+				body = fmt.Sprintf(
 					"You have %d open updates across %d exception categories.\n\n"+
 						"Open the exception queue to triage them: %s",
 					b.count, b.kinds, queueURL)
-				if _, err := tx.Exec(ctx, `
+				rows, err := tx.Query(ctx, `
+					SELECT id FROM notification_digest_queue
+					WHERE tenant_id=$1 AND recipient_hash=$2 AND flushed_at IS NULL
+					  AND recipient IS NOT NULL
+					FOR UPDATE SKIP LOCKED`, b.tenant, b.rhash)
+				if err != nil {
+					return err
+				}
+				for rows.Next() {
+					var id int64
+					if err := rows.Scan(&id); err != nil {
+						rows.Close()
+						return err
+					}
+					claimedIDs = append(claimedIDs, id)
+				}
+				rows.Close()
+				if err := rows.Err(); err != nil {
+					return err
+				}
+				if len(claimedIDs) == 0 {
+					return nil
+				}
+				_, err = tx.Exec(ctx, `
 					UPDATE notification_digest_queue SET flushed_at=now()
-					WHERE tenant_id=$1 AND recipient_hash=$2 AND flushed_at IS NULL`,
-					b.tenant, b.rhash); err != nil {
+					WHERE id = ANY($1)`, claimedIDs)
+				return err
+			}); err != nil {
+				log.Warn("digest flush claim", "tenant", b.tenant, "err", err)
+				continue
+			}
+			if len(claimedIDs) == 0 {
+				continue // lost the race to a concurrent flush replica
+			}
+			if err := sender.Send(ctx, "email", b.email, subject, body); err != nil {
+				log.Warn("digest flush send failed, claim released", "tenant", b.tenant, "err", err)
+				_ = db.WithTenant(ctx, pool, b.tenant, func(tx pgx.Tx) error {
+					_, err := tx.Exec(ctx, `
+						UPDATE notification_digest_queue SET flushed_at=NULL
+						WHERE id = ANY($1)`, claimedIDs)
 					return err
-				}
-				if err := sender.Send(ctx, "email", b.rhash, subject, body); err != nil {
-					return err
-				}
+				})
+				continue
+			}
+			_ = db.WithTenant(ctx, pool, b.tenant, func(tx pgx.Tx) error {
 				_, _ = tx.Exec(ctx, `
 					INSERT INTO notification_consent
 						(tenant_id, channel, recipient, recipient_hash, action, reason)
 					VALUES ($1,'email',$2,$3,'delivered','digest')`,
-					b.tenant, b.rhash, b.rhash)
-				metrics.DigestsFlushedTotal.WithLabelValues(b.tenant.String()).Inc()
+					b.tenant, b.email, b.rhash)
 				return nil
-			}); err != nil {
-				log.Warn("digest flush", "tenant", b.tenant, "err", err)
-			}
+			})
+			metrics.DigestsFlushedTotal.WithLabelValues(b.tenant.String()).Inc()
 		}
 		if len(batches) > 0 {
 			log.Info("digests flushed", "batches", len(batches))

@@ -248,8 +248,51 @@ paths:
                   data: { $ref: '#/components/schemas/DashboardStats' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
   /api/v1/shipments:
-    # NOTE: the canonical GET lives below (second /api/v1/shipments block:
-    # risk-ordered, limit max 250). This stale duplicate was removed 2026-10-08.
+    get:
+      tags: [shipments]
+      summary: List shipments, risk-ordered by default
+      parameters:
+        - in: query
+          name: sort
+          schema: { type: string, enum: [risk, recent, stale, eta], default: risk }
+          description: >
+            risk orders by the read-model score, so the list is a to-do list
+            ordered by consequence rather than a database view ordered by status.
+        - in: query
+          name: riskTier
+          schema: { $ref: '#/components/schemas/RiskTier' }
+        - in: query
+          name: hasPosition
+          schema: { type: boolean, default: false }
+          description: Restrict to shipments with a known position, for the fleet map.
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 250, default: 25 }
+        - in: query
+          name: offset
+          schema: { type: integer, minimum: 0, default: 0 }
+        - in: query
+          name: status
+          schema: { $ref: '#/components/schemas/Status' }
+        - in: query
+          name: carrier
+          schema: { type: string }
+        - in: query
+          name: search
+          schema: { type: string }
+          description: Matches tracking number or reference.
+      responses:
+        '200':
+          description: Envelope with shipment array plus paging meta
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Shipment' }
+                  meta: { $ref: '#/components/schemas/Meta' }
     post:
       tags: [shipments]
       summary: Create a shipment
@@ -376,20 +419,22 @@ paths:
   /api/v1/alerts:
     get:
       tags: [alerts]
-      summary: List alerts (open by default)
+      summary: List alerts (open by default), keyset-paginated
       parameters:
         - { in: query, name: status, schema: { type: string, enum: [open, resolved, all] } }
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 50, default: 50 } }
+        - { in: query, name: cursor, schema: { type: string }, description: Opaque nextCursor from the previous page. Absent means end of queue — there is deliberately no total count. }
+        - { in: query, name: includeSnoozed, schema: { type: boolean, default: false } }
       responses:
         '200':
-          description: Alerts for the caller's tenant
+          description: One page of the exception queue
           content:
             application/json:
               schema:
                 type: object
                 properties:
                   data:
-                    type: array
-                    items: { $ref: '#/components/schemas/Alert' }
+                    $ref: '#/components/schemas/AlertPage'
 
   /api/v1/alerts/{id}/resolve:
     post:
@@ -587,8 +632,12 @@ paths:
     post:
       tags: [shipments]
       summary: One-click carrier email from the exception queue (admin+)
+      description: >
+        Body requires `to` (operator-typed carrier address, validated).
+        No credential-stored contact exists and none is guessed.
       responses:
         '200': { description: Queued }
+        '400': { description: Missing/invalid `to` }
 
   /api/v1/auth/mfa/recovery-codes:
     post:
@@ -770,54 +819,291 @@ paths:
                 examples: [event: shipment.updated]
         '404': { description: No public shipment for this tracking number, error: { $ref: '#/components/schemas/Error' } }
 
-  /api/v1/shipments:
+  /api/v1/track/{trackingNumber}:
     get:
-      tags: [shipments]
-      summary: List shipments, risk-ordered by default
+      tags: [tracking]
+      summary: Public safe-projection of one shipment (no login)
+      description: Only shipments with is_public=true resolve; all others 404. Never exposes risk scores or internal fields.
+      security: []
       parameters:
-        - in: query
-          name: sort
-          schema: { type: string, enum: [risk, recent, stale, eta], default: risk }
-          description: >
-            risk orders by the read-model score, so the list is a to-do list
-            ordered by consequence rather than a database view ordered by status.
-        - in: query
-          name: riskTier
-          schema: { $ref: '#/components/schemas/RiskTier' }
-        - in: query
-          name: hasPosition
-          schema: { type: boolean, default: false }
-          description: Restrict to shipments with a known position, for the fleet map.
-        - in: query
-          name: limit
-          schema: { type: integer, minimum: 1, maximum: 250, default: 25 }
-        - in: query
-          name: offset
-          schema: { type: integer, minimum: 0, default: 0 }
-        - in: query
-          name: status
-          schema: { $ref: '#/components/schemas/Status' }
-        - in: query
-          name: carrier
-          schema: { type: string }
-        - in: query
-          name: search
-          schema: { type: string }
-          description: Matches tracking number or reference.
+        - { in: path, name: trackingNumber, required: true, schema: { type: string } }
       responses:
         '200':
-          description: Paged list
+          description: Public tracking snapshot
           content:
             application/json:
               schema:
-                allOf:
-                  - type: array
-                    items: { $ref: '#/components/schemas/Shipment' }
-                  - type: object
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/PublicTracking' }
+        '404': { description: No public shipment for this tracking number }
+
+  /api/v1/track/{trackingNumber}/subscribe:
+    post:
+      tags: [tracking]
+      summary: Start double opt-in subscription for one shipment
+      description: Creates a pending subscription and emails a confirm link. Only active (confirmed) rows are ever notified.
+      security: []
+      parameters:
+        - { in: path, name: trackingNumber, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                channel: { type: string, enum: [email, sms, whatsapp] }
+                recipient: { type: string }
+                digestOnly: { type: boolean, default: false }
+      responses:
+        '200': { description: Confirmation pending — check the inbox }
+        '404': { description: No public shipment for this tracking number }
+
+  /api/v1/stream:
+    get:
+      tags: [stream]
+      summary: Authenticated tenant event stream (SSE hint channel)
+      description: >
+        SSE is a hint, queries are truth: clients invalidate React Query keys
+        on shipment.updated / alert.changed and refetch. Same monotonic-id +
+        heartbeat contract as the public stream.
+      responses:
+        '200':
+          description: text/event-stream
+          content:
+            text/event-stream:
+              schema: { type: string }
+
+  /api/v1/notify/status:
+    get:
+      tags: [alerts]
+      summary: Provider liveness plus the caller's interrupt-budget position
+      description: >
+        Surfaces the hard budget where triage happens ("2/5 interrupts used")
+        so operators feel protected, not throttled. Booleans and counts only.
+      responses:
+        '200':
+          description: Budget snapshot
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
                     properties:
-                      meta: { $ref: '#/components/schemas/Meta' }
+                      providers: { type: object, additionalProperties: { type: boolean } }
+                      interruptHourlyCap: { type: integer }
+                      interruptsUsed: { type: integer }
+                      digestPending: { type: integer }
+
+  /api/v1/shipments/{id}/legs:
+    get:
+      tags: [shipments]
+      summary: List journey legs
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Legs in sequence order
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Leg' }
+    post:
+      tags: [shipments]
+      summary: Add a journey leg (admin+)
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Leg created }
+
+  /api/v1/legs/{id}:
+    delete:
+      tags: [shipments]
+      summary: Remove a journey leg (admin+)
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Leg removed }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/shipments/{id}/documents:
+    get:
+      tags: [shipments]
+      summary: List documents (BOL, POD, customs paperwork)
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Document list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/DocItem' }
+    post:
+      tags: [shipments]
+      summary: Upload a document, multipart form (admin+)
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Document stored }
+
+  /api/v1/documents/{id}/download:
+    get:
+      tags: [shipments]
+      summary: Download a document
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: File bytes }
+
+  /api/v1/documents/{id}:
+    delete:
+      tags: [shipments]
+      summary: Delete a document (admin+)
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Document deleted }
+
+  /api/v1/shipments/{id}/audit:
+    get:
+      tags: [shipments]
+      summary: Shipment activity trail
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Recent audit items
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/AuditItem' }
+
+  /api/v1/team/invite:
+    post:
+      tags: [auth]
+      summary: Invite a team member (admin+)
+      responses:
+        '200': { description: Invited }
+
+  /api/v1/team/{id}/deactivate:
+    post:
+      tags: [auth]
+      summary: Deactivate a team member (admin+)
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Deactivated }
+
+  /api/v1/carriers/{carrier}/poll:
+    post:
+      tags: [webhooks]
+      summary: Trigger a carrier poll now (admin+)
+      parameters:
+        - { in: path, name: carrier, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Poll queued }
+
+  /api/v1/carriers/{carrier}:
+    delete:
+      tags: [webhooks]
+      summary: Remove a carrier integration (admin+)
+      parameters:
+        - { in: path, name: carrier, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Carrier removed }
+
+  /api/v1/integrations/commerce:
+    get:
+      tags: [webhooks]
+      summary: List commerce integrations (admin+)
+      responses:
+        '200': { description: Integration list }
+    post:
+      tags: [webhooks]
+      summary: Connect a commerce integration (admin+)
+      responses:
+        '200': { description: Integration connected }
+
+  /api/v1/integrations/commerce/{id}:
+    delete:
+      tags: [webhooks]
+      summary: Remove a commerce integration (admin+)
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Integration removed }
+
+  /api/v1/account/export:
+    get:
+      tags: [auth]
+      summary: Export tenant data (admin+)
+      responses:
+        '200': { description: Export archive }
+
+  /api/v1/account/theme:
+    patch:
+      tags: [auth]
+      summary: Set UI theme preference
+      responses:
+        '200': { description: Theme saved }
+
+  /api/v1/account:
+    delete:
+      tags: [auth]
+      summary: Erase the tenant account (owner only)
+      responses:
+        '200': { description: Erasure accepted }
+
+  /api/v1/webhooks/out/{id}/deliveries:
+    get:
+      tags: [webhooks]
+      summary: Webhook delivery attempts (admin+)
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Delivery list }
+
+  /api/v1/jobs/dead/{id}/replay:
+    post:
+      tags: [health]
+      summary: Replay a dead-letter job (admin+)
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Job replayed }
 
 components:
+  responses:
+    NotFound:
+      description: Not found — or not visible to your organization (404, never 403)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unauthenticated:
+      description: Missing or invalid session (401)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    BadRequest:
+      description: Validation failed (400)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
   schemas:
     Status:
       type: string
@@ -848,8 +1134,11 @@ components:
     AlertKind:
       type: string
       enum:
-        [delay, customs_hold, port_congestion, sla_breach, eta_revised,
+        [delay, blank_sailing, customs_hold, port_congestion, sla_breach, eta_revised,
          disruption, delivery_failed, stale, dwell, dwell_critical, eta_slip, recurring]
+      description: >
+        delay is the generic carrier-exception kind; blank_sailing is distinct
+        so a cancelled service never collides with it on the dedup index.
     AlertRootCause:
       type: string
       enum:
@@ -932,6 +1221,81 @@ components:
         dwellRatio: { type: number }
         lat: { type: number }
         lng: { type: number }
+        riskBreakdown: { $ref: '#/components/schemas/RiskBreakdown' }
+
+    RiskBreakdown:
+      type: object
+      description: >
+        Per-term score explanation exactly as the server computed it. Render
+        it; never recompute the weights client-side. Absent on rows predating
+        the breakdown column — treat as "not yet computed", not as zero.
+      properties:
+        dwell: { type: number }
+        slip: { type: number }
+        stale: { type: number }
+        critical: { type: number }
+        alerts: { type: number }
+        value: { type: number }
+        valueKnown: { type: boolean }
+        relief: { type: number, description: Negative — customer already notified. }
+
+    AlertPage:
+      type: object
+      description: >
+        One page of the exception queue. Pass nextCursor back as ?cursor=;
+        absent means end of queue. No total count by design.
+      properties:
+        alerts:
+          type: array
+          items: { $ref: '#/components/schemas/Alert' }
+        nextCursor: { type: string }
+
+    Leg:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        seq: { type: integer }
+        carrier: { type: string }
+        mode: { type: string }
+        origin: { type: string }
+        destination: { type: string }
+        status: { type: string }
+        eta: { type: string, format: date-time }
+
+    DocItem:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        filename: { type: string }
+        contentType: { type: string }
+        sizeBytes: { type: integer }
+        createdAt: { type: string, format: date-time }
+
+    AuditItem:
+      type: object
+      properties:
+        actor: { type: string }
+        action: { type: string }
+        createdAt: { type: string, format: date-time }
+
+    PublicTracking:
+      type: object
+      description: Safe projection — no risk scores, no internal fields.
+      properties:
+        trackingNumber: { type: string }
+        carrier: { type: string }
+        mode: { type: string }
+        origin: { type: string }
+        destination: { type: string }
+        status: { $ref: '#/components/schemas/Status' }
+        eta: { type: string, format: date-time }
+        etaSource: { $ref: '#/components/schemas/ETASource' }
+        shippedAt: { type: string, format: date-time }
+        deliveredAt: { type: string, format: date-time }
+        lastUpdate: { type: string, format: date-time }
+        events:
+          type: array
+          items: { $ref: '#/components/schemas/ShipmentEvent' }
 
     ShipmentEvent:
       type: object

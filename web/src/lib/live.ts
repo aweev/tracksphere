@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useToasts } from '@/components/Toasts';
+import type { ConnState } from '@/components/ConnectionDot';
 
 interface StreamEvent {
   type: string;
@@ -28,10 +29,22 @@ export function useLiveStream(enabled: boolean) {
   useEffect(() => {
     if (!enabled) return;
     let closed = false;
+    let attempts = 0;
+    // Last SSE id seen on this connection (server sends monotonic ids).
+    // The browser replays it as Last-Event-ID on auto-reconnect; we keep a
+    // copy so gap-refetch logic can reason about it, and flip hadError so a
+    // re-open refetches anything the outage swallowed.
+    let hadError = false;
 
     const open = () => {
+      if (closed) return;
+      // Don't hold a streaming connection for a hidden tab — reconnect on
+      // visible. Saves battery/radio and matches SSE-as-hint (queries are
+      // truth; the stream only invalidates).
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
       const es = new EventSource('/api/v1/stream');
       ref.current = es;
+      attempts = 0;
 
       const invalidate = () => {
         void qc.invalidateQueries({ queryKey: ['shipments'] });
@@ -41,20 +54,18 @@ export function useLiveStream(enabled: boolean) {
       };
 
       es.addEventListener('shipment.updated', (e) => {
+        trackLastId('/api/v1/stream', e as MessageEvent);
         const data = parse((e as MessageEvent).data);
         invalidate();
         if (data?.shipmentId) {
           void qc.invalidateQueries({ queryKey: ['shipment', data.shipmentId] });
         }
-        pushRef.current({
-          title: 'Shipment updated',
-          body: 'Carrier data arrived — views refreshed.',
-          tone: 'info',
-          href: data?.shipmentId ? `/shipments/${data.shipmentId}` : '/shipments',
-          action: 'Open shipment →',
-        });
+        // Quiet invalidate, no toast: shipment.updated fires per carrier
+        // ping and toasting each one trains operators to ignore toasts.
+        // alert.changed below is the interrupting signal.
       });
-      es.addEventListener('alert.changed', () => {
+      es.addEventListener('alert.changed', (e) => {
+        trackLastId('/api/v1/stream', e as MessageEvent);
         invalidate();
         pushRef.current({
           title: 'Exception raised',
@@ -65,16 +76,37 @@ export function useLiveStream(enabled: boolean) {
         });
       });
       es.onerror = () => {
-        // EventSource retries automatically unless closed.
+        hadError = true;
+        // EventSource retries automatically unless closed. On clean close,
+        // reconnect with capped exponential backoff + jitter (thundering
+        // herd guard when the API restarts).
         if (es.readyState === EventSource.CLOSED && !closed) {
-          setTimeout(open, 2000);
+          attempts += 1;
+          const backoff = Math.min(30000, 1000 * 2 ** Math.min(attempts, 5));
+          const jitter = Math.random() * 1000;
+          setTimeout(open, backoff + jitter);
         }
       };
+      es.addEventListener('open', () => {
+        attempts = 0;
+        // A re-open after a drop may have missed frames between the last
+        // seen id and now (Last-Event-ID resumes the stream, but any gap
+        // during the outage is only closed by refetch — queries are truth).
+        if (hadError) {
+          hadError = false;
+          invalidate();
+        }
+      });
     };
 
     open();
+    const onVisibleRoot = () => {
+      if (document.visibilityState === 'visible' && !closed && !ref.current) open();
+    };
+    document.addEventListener('visibilitychange', onVisibleRoot);
     return () => {
       closed = true;
+      document.removeEventListener('visibilitychange', onVisibleRoot);
       ref.current?.close();
       ref.current = null;
     };
@@ -87,4 +119,106 @@ function parse(raw: string): StreamEvent | null {
   } catch {
     return null;
   }
+}
+
+/** Last-Event-ID ledger. The browser sends the last seen id automatically on
+ *  reconnect; recording it here keeps gap reasoning explicit and gives every
+ *  tracked stream the same resume semantics. */
+const lastSeenIds = new Map<string, string>();
+
+function trackLastId(url: string, e: MessageEvent) {
+  const id = (e as MessageEvent).lastEventId;
+  if (id) lastSeenIds.set(url, id);
+}
+
+export function lastEventId(url: string): string | undefined {
+  return lastSeenIds.get(url);
+}
+
+/**
+ * Tracked single-purpose stream (shipment detail, public portal). Returns
+ * the connection state for ConnectionDot and refetches on reconnect so an
+ * outage gap can never strand a stale snapshot. Callers subscribe to their
+ * event types via onEvent; the hook owns open/backoff/visibility/resume.
+ */
+export function useTrackedStream(
+  url: string | null,
+  opts: {
+    events: string[];
+    onEvent: (type: string, data: StreamEvent | null) => void;
+    onReconnect?: () => void;
+  },
+): ConnState {
+  const [state, setState] = useState<ConnState>(url ? 'connecting' : 'offline');
+  const optsRef = useRef(opts);
+  optsRef.current = opts;
+
+  useEffect(() => {
+    if (!url) {
+      setState('offline');
+      return;
+    }
+    let closed = false;
+    let attempts = 0;
+    let hadError = false;
+    let es: EventSource | null = null;
+    setState('connecting');
+
+    const open = () => {
+      if (closed) return;
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      es = new EventSource(url);
+      const handle = (type: string) => (e: Event) => {
+        trackLastId(url, e as MessageEvent);
+        setState('live');
+        optsRef.current.onEvent(type, parse((e as MessageEvent).data));
+      };
+      for (const t of optsRef.current.events) es.addEventListener(t, handle(t));
+      es.addEventListener('open', () => {
+        attempts = 0;
+        if (hadError) {
+          hadError = false;
+          setState('live');
+          optsRef.current.onReconnect?.();
+        } else {
+          setState('live');
+        }
+      });
+      es.onerror = () => {
+        hadError = true;
+        setState('reconnecting');
+        if (es && es.readyState === EventSource.CLOSED && !closed) {
+          attempts += 1;
+          const backoff = Math.min(30000, 1000 * 2 ** Math.min(attempts, 5));
+          setTimeout(open, backoff + Math.random() * 1000);
+        }
+      };
+    };
+
+    open();
+    const onVisible = () => {
+      if (document.visibilityState === 'visible' && !closed && !es) open();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    const onOffline = () => setState('offline');
+    const onOnline = () => {
+      if (!closed) {
+        es?.close();
+        es = null;
+        open();
+      }
+    };
+    window.addEventListener('offline', onOffline);
+    window.addEventListener('online', onOnline);
+    return () => {
+      closed = true;
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('offline', onOffline);
+      window.removeEventListener('online', onOnline);
+      es?.close();
+      es = null;
+    };
+  }, [url]);
+
+  return state;
 }

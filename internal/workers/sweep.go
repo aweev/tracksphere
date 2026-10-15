@@ -335,18 +335,28 @@ func sweepTenant(ctx context.Context, tx pgx.Tx, log *slog.Logger, tenantID uuid
 		due = append(due, rule)
 	}
 
-	// Evaluate in stable windows until exhausted. There is no ceiling on total
-	// coverage: the loop pages by shipment_id (immutable, so membership cannot
-	// churn) and stops only on a short window. Ordering by risk_score would be
-	// nicer to read but cannot keyset stably — scores move as alerts raise —
-	// and detection requires completeness, not presentation order; the UI
-	// sorts by risk itself.
+	// Evaluate in stable windows until exhausted or the ceiling is hit. The
+	// ceiling bounds one tenant's share of one pass: without it a 50k-row
+	// tenant holds a single WithTenant transaction past the 4-minute lease
+	// TTL, the lease is stolen, and a second replica duplicates the pass
+	// (doubled DB load plus a doubled notify storm). Deferred shipments keep
+	// needs_refresh set, so the next pass resumes them — detection is
+	// delayed, never dropped. Ordering by shipment_id (immutable) keeps
+	// membership stable across passes; ordering by risk_score would be nicer
+	// to read but cannot keyset stably — scores move as alerts raise — and
+	// detection requires completeness, not presentation order; the UI sorts
+	// by risk itself.
 	confirmed := map[uuid.UUID]bool{}
 	var allIDs []uuid.UUID
+	hitCeiling := false
 
 	var cursor uuid.UUID
 	haveCursor := false
-	for {
+	for windows := 0; ; windows++ {
+		if windows >= sweepMaxWindowsPerTenant {
+			hitCeiling = true
+			break
+		}
 		candidates, next, err := loadCandidateWindow(ctx, tx, tenantID, cursor, haveCursor, limit)
 		if err != nil {
 			return 0, 0, err
@@ -416,12 +426,20 @@ func sweepTenant(ctx context.Context, tx pgx.Tx, log *slog.Logger, tenantID uuid
 	// Refresh the read model AGAIN so open-alert counts, risk scores and the
 	// risk ordering reflect what this pass just found, not what it started
 	// from. Without this the queue stays stale for an hour after detection.
-	// allIDs accumulates every shipment evaluated across all windows.
-	for _, id := range allIDs {
-		// Best-effort: a single bad row must not fail a pass that already
-		// raised correctly. Its needs_refresh flag stays set, so the next
-		// batch retries it.
-		_ = readmodel.Refresh(ctx, tx, id)
+	// allIDs accumulates every shipment evaluated across all windows. Batched
+	// set-based (not one Refresh per row): the old per-row loop turned a
+	// 20k-shipment pass into 100k statements inside one transaction.
+	if n, err := readmodel.RefreshMany(ctx, tx, tenantID, allIDs); err != nil {
+		log.Warn("post-pass refresh batch failed, flags stay set for retry",
+			"tenant", tenantID, "err", err)
+	} else if n < len(allIDs) {
+		log.Warn("post-pass refresh partial", "tenant", tenantID,
+			"refreshed", n, "evaluated", len(allIDs))
+	}
+	if hitCeiling {
+		log.Warn("sweep ceiling hit, remainder deferred to next pass",
+			"tenant", tenantID, "evaluated", len(allIDs))
+		metrics.SweepCeilingHitsTotal.WithLabelValues(tenantID.String()).Inc()
 	}
 	return raised, cleared, nil
 }
@@ -512,8 +530,12 @@ func raiseFromRule(ctx context.Context, tx pgx.Tx, log *slog.Logger, tenantID uu
 	}
 
 	// xmax = 0 distinguishes a real INSERT from the ON CONFLICT DO UPDATE path,
-	// so only genuinely new alerts fan out to notifications and SSE.
+	// so only genuinely new alerts fan out to notifications and SSE. The id is
+	// returned so the notify job can key its idempotency on the alert, not on
+	// the message text: a re-raise after resolve must notify again, while a
+	// job retry must not.
 	var inserted bool
+	var alertID uuid.UUID
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO alerts
 			(tenant_id, shipment_id, kind, severity, title, message,
@@ -524,10 +546,10 @@ func raiseFromRule(ctx context.Context, tx pgx.Tx, log *slog.Logger, tenantID uu
 			SET last_seen_at = now(),
 			    acknowledged_at = COALESCE(alerts.acknowledged_at, now()),
 			    snoozed_until = COALESCE(alerts.snoozed_until, $10)
-		RETURNING (xmax = 0)`,
+		RETURNING id, (xmax = 0)`,
 		tenantID, shipmentID, rule.Kind, rule.Severity, title, message,
 		nullableText(rule.Raise.RootCause), dueAt, nullableText(rule.Raise.Recommend),
-		snoozeUntil).Scan(&inserted); err != nil {
+		snoozeUntil).Scan(&alertID, &inserted); err != nil {
 		return false, err
 	}
 
@@ -542,7 +564,7 @@ func raiseFromRule(ctx context.Context, tx pgx.Tx, log *slog.Logger, tenantID uu
 		}
 		// Queue the ops notification; severity routing and the interrupt budget
 		// are applied by the dispatcher, not here.
-		if err := enqueueAlertNotify(ctx, tx, tenantID, shipmentID, rule.Severity,
+		if err := enqueueAlertNotify(ctx, tx, tenantID, shipmentID, alertID, rule.Severity,
 			rule.Raise.Interrupt, rule.Kind); err != nil {
 			return true, err
 		}
@@ -614,11 +636,14 @@ func autoResolve(ctx context.Context, tx pgx.Tx, log *slog.Logger, tenantID uuid
 // interrupt charge on every cycle.
 var SweepStaleAfter = 2 * SweepInterval
 
-// enqueueAlertNotify queues the ops notification for a new alert.
-func enqueueAlertNotify(ctx context.Context, tx pgx.Tx, tenantID, shipmentID uuid.UUID, severity string, interrupt bool, kind string) error {
+// enqueueAlertNotify queues the ops notification for a new alert. alertID
+// keys the dispatcher's idempotency: retries of this job share it, a later
+// re-raise gets a new alert row and therefore a new key.
+func enqueueAlertNotify(ctx context.Context, tx pgx.Tx, tenantID, shipmentID, alertID uuid.UUID, severity string, interrupt bool, kind string) error {
 	return queue.EnqueueTxTenant(ctx, tx, &tenantID, "", AlertNotifyJob, map[string]any{
 		"tenantId":   tenantID.String(),
 		"shipmentId": shipmentID.String(),
+		"alertId":    alertID.String(),
 		"severity":   severity,
 		"interrupt":  interrupt,
 		"kind":       kind,
@@ -697,6 +722,16 @@ func sweepOne(ctx context.Context, pool *pgxpool.Pool, log *slog.Logger, tenantI
 			return err
 		}
 		escalated = e
+		// SLA backfill: due_at is snapshotted at raise time, so alerts raised
+		// before the SLA existed (or while tenants.sla_* changed) carry NULL
+		// and never show a countdown. Backfill from detected_at + the
+		// CURRENT tenant SLA — a countdown from detection, not from now.
+		if _, err := tx.Exec(ctx, `
+			UPDATE alerts SET due_at =
+				detected_at + make_interval(mins => coalesce(sla_minutes_for(tenant_id, severity), 1440))
+			WHERE tenant_id=$1 AND status='open' AND due_at IS NULL`, tenantID); err != nil {
+			return err
+		}
 		return nil
 	})
 	return raised, cleared, escalated, err
@@ -705,6 +740,12 @@ func sweepOne(ctx context.Context, pool *pgxpool.Pool, log *slog.Logger, tenantI
 // sweepBatchSize bounds work per tenant per pass so a large tenant cannot hold
 // the lease past its TTL.
 const sweepBatchSize = 2000
+
+// sweepMaxWindowsPerTenant caps candidate windows per tenant per pass: 10 ×
+// 2000 = 20k shipments, the CPX21 monthly volume for one tenant, inside one
+// pass. Past the ceiling the remainder keeps needs_refresh set and the next
+// pass (15 minutes later) resumes it. Detection delayed, never dropped.
+const sweepMaxWindowsPerTenant = 10
 
 // escalateBreached marks acknowledged, unassigned alerts past their SLA. An
 // unacknowledged alert is NOT escalated: nagging someone who has not even seen
@@ -823,13 +864,17 @@ func seedDefaultRules(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID) error 
 }
 
 // EnqueueSweep schedules one sweep. Idempotent within a window via the job id,
-// so a restart mid-window cannot run the sweep twice.
+// so a restart mid-window cannot run the sweep twice. The bucket is the
+// 15-minute scheduling window (matching SweepInterval and the worker ticker):
+// the old hourly bucket silently dropped 3 of every 4 ticks, so the
+// effective cadence was hourly while SweepStaleAfter assumed 15-minute
+// passes — one missed hourly pass then mass auto-resolved the queue.
 func EnqueueSweep(ctx context.Context, pool *pgxpool.Pool) error {
 	_, err := pool.Exec(ctx, `
 		INSERT INTO jobs (kind, payload, run_at, dedup_key)
 		VALUES ($1, '{}'::jsonb, now(), $2)
 		ON CONFLICT (dedup_key) WHERE dedup_key IS NOT NULL DO NOTHING`,
-		SweepJob, "sweep:"+time.Now().UTC().Format("2006-01-02T15"))
+		SweepJob, "sweep:"+time.Now().UTC().Truncate(15*time.Minute).Format("20060102T1504"))
 	return err
 }
 

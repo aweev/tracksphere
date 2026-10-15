@@ -90,6 +90,11 @@ var (
 		Help: "Total alerts auto-resolved by sweep",
 	})
 
+	SweepCeilingHitsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tracksphere_sweep_ceiling_hits_total",
+		Help: "Sweep passes that hit the per-tenant window ceiling and deferred shipments",
+	}, []string{"tenant"})
+
 	// Notification metrics
 	NotificationsAttemptedTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "tracksphere_notifications_attempted_total",

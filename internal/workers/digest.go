@@ -17,6 +17,7 @@ import (
 	"github.com/tracksphere/tracksphere/internal/db"
 	"github.com/tracksphere/tracksphere/internal/httpclient"
 	"github.com/tracksphere/tracksphere/internal/intel"
+	"github.com/tracksphere/tracksphere/internal/notify"
 	"github.com/tracksphere/tracksphere/internal/queue"
 )
 
@@ -160,8 +161,12 @@ func DailySummary(ctx context.Context, pool *pgxpool.Pool, tenantID uuid.UUID) (
 }
 
 // EnqueueDigests fans out one report.weekly per tenant (system read, like
-// the carrier scheduler). Runs weekly from the worker.
+// the carrier scheduler). Runs weekly from the worker. Idempotent per
+// tenant per week via the job dedup_key: a restart mid-fanout cannot queue
+// the week twice (the old EnqueueTx call had no key, so every restart
+// re-queued every tenant).
 func EnqueueDigests(ctx context.Context, pool *pgxpool.Pool) (int, error) {
+	week := time.Now().UTC().Format("2006-01-02")
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		return 0, err
@@ -188,8 +193,9 @@ func EnqueueDigests(ctx context.Context, pool *pgxpool.Pool) (int, error) {
 		return 0, err
 	}
 	for _, id := range ids {
-		if err := queue.EnqueueTx(ctx, tx, ReportWeeklyJob,
-			map[string]any{"tenantId": id.String()}, time.Time{}); err != nil {
+		tenantID := id
+		if err := queue.EnqueueTxTenant(ctx, tx, &tenantID, "weekly:"+id.String()+":"+week,
+			ReportWeeklyJob, map[string]any{"tenantId": id.String()}, time.Time{}); err != nil {
 			return 0, err
 		}
 	}
@@ -199,8 +205,10 @@ func EnqueueDigests(ctx context.Context, pool *pgxpool.Pool) (int, error) {
 	return len(ids), nil
 }
 
-// EnqueueDailyReports schedules daily summaries for all tenants.
+// EnqueueDailyReports schedules daily summaries for all tenants. Idempotent
+// per tenant per day (same dedup reasoning as EnqueueDigests).
 func EnqueueDailyReports(ctx context.Context, pool *pgxpool.Pool) (int, error) {
+	day := time.Now().UTC().Format("2006-01-02")
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		return 0, err
@@ -227,8 +235,9 @@ func EnqueueDailyReports(ctx context.Context, pool *pgxpool.Pool) (int, error) {
 		return 0, err
 	}
 	for _, id := range ids {
-		if err := queue.EnqueueTx(ctx, tx, ReportDailyJob,
-			map[string]any{"tenantId": id.String()}, time.Time{}); err != nil {
+		tenantID := id
+		if err := queue.EnqueueTxTenant(ctx, tx, &tenantID, "daily:"+id.String()+":"+day,
+			ReportDailyJob, map[string]any{"tenantId": id.String()}, time.Time{}); err != nil {
 			return 0, err
 		}
 	}
@@ -239,6 +248,9 @@ func EnqueueDailyReports(ctx context.Context, pool *pgxpool.Pool) (int, error) {
 }
 
 // HandleDigest delivers the weekly digest as an owner email notification.
+// Claim-in-tx, Send-after-commit: the old code only INSERTed an audit row
+// with provider='log' and never transmitted anything — the email was
+// vaporware. The dedupe key (tenant + week) makes redelivery idempotent.
 func HandleDigest(pool *pgxpool.Pool, log *slog.Logger) func(context.Context, []byte) error {
 	return func(ctx context.Context, body []byte) error {
 		var p struct {
@@ -251,7 +263,8 @@ func HandleDigest(pool *pgxpool.Pool, log *slog.Logger) func(context.Context, []
 		if err != nil {
 			return err
 		}
-		return db.WithTenant(ctx, pool, p.TenantID, func(tx pgx.Tx) error {
+		var sends []pendingSend
+		err = db.WithTenant(ctx, pool, p.TenantID, func(tx pgx.Tx) error {
 			var ownerEmail string
 			_ = tx.QueryRow(ctx, `
 				SELECT email FROM users WHERE tenant_id=$1 AND role='owner' AND is_active=true
@@ -268,16 +281,27 @@ func HandleDigest(pool *pgxpool.Pool, log *slog.Logger) func(context.Context, []
 				"Week of %s\nDelivered: %d · On-time: %s\nExceptions: %d · Open alerts: %d · Stale (>48h): %d",
 				d.WeekStart.Format("2006-01-02"), d.Delivered, ot,
 				d.Exceptions, d.OpenAlerts, d.StaleShipments)
-			_, err := tx.Exec(ctx, `
-				INSERT INTO notifications (tenant_id, channel, recipient, subject, body, provider)
-				VALUES ($1,'email',$2,$3,$4,'log')`,
-				p.TenantID, ownerEmail, subject, msg)
+			sender := notify.ForChannel(log, "email")
+			ps := pendingSend{
+				TenantID: p.TenantID, Channel: "email", To: ownerEmail,
+				Subject: subject, Body: msg, Provider: sender.Name(),
+				DedupeKey: sendKey("weekly", p.TenantID.String(),
+					d.WeekStart.Format("2006-01-02"), ownerEmail),
+			}
+			owned, _, err := claimSendTx(ctx, tx, ps)
 			if err != nil {
 				return err
+			}
+			if owned {
+				sends = append(sends, ps)
 			}
 			log.Info("weekly digest", "tenant", p.TenantID, "delivered", d.Delivered)
 			return nil
 		})
+		if err != nil {
+			return err
+		}
+		return flushSends(ctx, pool, log, sends)
 	}
 }
 
@@ -288,7 +312,7 @@ func HandleDailyReport(pool *pgxpool.Pool, log *slog.Logger) func(context.Contex
 	
 	client := httpclient.NewClient(httpclient.NotificationProviderClient)
 	
-	return func(ctx context.Context, body []byte) error {
+		return func(ctx context.Context, body []byte) error {
 		var p struct {
 			TenantID uuid.UUID `json:"tenantId"`
 		}
@@ -299,17 +323,44 @@ func HandleDailyReport(pool *pgxpool.Pool, log *slog.Logger) func(context.Contex
 		if err != nil {
 			return err
 		}
-		
-		return db.WithTenant(ctx, pool, p.TenantID, func(tx pgx.Tx) error {
+
+		// Email claims are collected in-transaction and transmitted after
+		// commit (same outbox discipline as every other send path — the old
+		// code INSERTed provider='log' rows that were never transmitted).
+		// Slack/Teams post synchronously with the job context: the old
+		// `go sendSlackWebhook(context.Background())` detached goroutine
+		// outlived the job, dropped errors, and raced process shutdown.
+		var sends []pendingSend
+		subject := fmt.Sprintf("TrackSphere daily summary — %s", d.Date.Format("2006-01-02"))
+		avgRes := "—"
+		if d.AvgResolutionHours != nil {
+			avgRes = fmt.Sprintf("%.1fh", *d.AvgResolutionHours)
+		}
+		msg := fmt.Sprintf(
+			"Daily Summary for %s\n\n"+
+				"Shipments created: %d\n"+
+				"Shipments delivered: %d\n"+
+				"Active shipments: %d\n"+
+				"Exceptions raised: %d\n"+
+				"Critical alerts open: %d\n"+
+				"Alerts resolved: %d\n"+
+				"Avg resolution time: %s\n"+
+				"Top carrier: %s",
+			d.Date.Format("2006-01-02"),
+			d.ShipmentsCreated, d.ShipmentsDelivered, d.ActiveShipments,
+			d.ExceptionsRaised, d.CriticalAlertsOpen, d.AlertsResolved,
+			avgRes, d.TopCarrier)
+
+		err = db.WithTenant(ctx, pool, p.TenantID, func(tx pgx.Tx) error {
 			// Get all admin/owner emails for delivery
 			rows, err := tx.Query(ctx, `
-				SELECT email FROM users 
+				SELECT email FROM users
 				WHERE tenant_id=$1 AND role IN ('owner','admin') AND is_active=true`)
 			if err != nil {
 				return err
 			}
 			defer rows.Close()
-			
+
 			var recipients []string
 			for rows.Next() {
 				var email string
@@ -318,61 +369,63 @@ func HandleDailyReport(pool *pgxpool.Pool, log *slog.Logger) func(context.Contex
 				}
 				recipients = append(recipients, email)
 			}
-			
+
 			if len(recipients) == 0 {
 				return nil
 			}
-			
-			avgRes := "—"
-			if d.AvgResolutionHours != nil {
-				avgRes = fmt.Sprintf("%.1fh", *d.AvgResolutionHours)
-			}
-			
-			subject := fmt.Sprintf("TrackSphere daily summary — %s", d.Date.Format("2006-01-02"))
-			msg := fmt.Sprintf(
-				"Daily Summary for %s\n\n"+
-					"📦 Shipments created: %d\n"+
-					"✅ Shipments delivered: %d\n"+
-					"🚢 Active shipments: %d\n"+
-					"⚠️ Exceptions raised: %d\n"+
-					"🔴 Critical alerts open: %d\n"+
-					"✅ Alerts resolved: %d\n"+
-					"⏱ Avg resolution time: %s\n"+
-					"🏆 Top carrier: %s",
-				d.Date.Format("2006-01-02"),
-				d.ShipmentsCreated, d.ShipmentsDelivered, d.ActiveShipments,
-				d.ExceptionsRaised, d.CriticalAlertsOpen, d.AlertsResolved,
-				avgRes, d.TopCarrier)
-			
-			// Send email to each recipient
+
+			sender := notify.ForChannel(log, "email")
 			for _, email := range recipients {
-				_, err := tx.Exec(ctx, `
-					INSERT INTO notifications (tenant_id, channel, recipient, subject, body, provider)
-					VALUES ($1,'email',$2,$3,$4,'log')`,
-					p.TenantID, email, subject, msg)
+				ps := pendingSend{
+					TenantID: p.TenantID, Channel: "email", To: email,
+					Subject: subject, Body: msg, Provider: sender.Name(),
+					DedupeKey: sendKey("daily", p.TenantID.String(),
+						d.Date.Format("2006-01-02"), email),
+				}
+				owned, _, err := claimSendTx(ctx, tx, ps)
 				if err != nil {
-					log.Warn("daily report email insert failed", "tenant", p.TenantID, "err", err)
+					log.Warn("daily report email claim failed", "tenant", p.TenantID, "err", err)
+					continue
+				}
+				if owned {
+					sends = append(sends, ps)
 				}
 			}
-			
-			// Send to Slack webhook if configured
-			if slackWebhook != "" && d.CriticalAlertsOpen > 0 {
-				go sendSlackWebhook(slackWebhook, client, d, subject, msg)
-			}
-			
-			// Send to Teams webhook if configured
-			if teamsWebhook != "" && d.CriticalAlertsOpen > 0 {
-				go sendTeamsWebhook(teamsWebhook, client, d, subject, msg)
-			}
-			
-			log.Info("daily report sent", "tenant", p.TenantID, "recipients", len(recipients))
 			return nil
 		})
+		if err != nil {
+			return err
+		}
+		if err := flushSends(ctx, pool, log, sends); err != nil {
+			return err
+		}
+
+		// Webhooks fire for every daily summary — not only when criticals are
+		// open. A quiet "all clear" is information the channel subscribed to;
+		// gating on CriticalAlertsOpen>0 made silence ambiguous (healthy vs
+		// broken scheduler look identical).
+		if slackWebhook != "" {
+			if err := sendSlackWebhook(ctx, slackWebhook, client, d, subject, msg); err != nil {
+				log.Warn("daily slack post failed", "tenant", p.TenantID, "err", err)
+			}
+		}
+
+		// Send to Teams webhook if configured
+		if teamsWebhook != "" {
+			if err := sendTeamsWebhook(ctx, teamsWebhook, client, d, subject, msg); err != nil {
+				log.Warn("daily teams post failed", "tenant", p.TenantID, "err", err)
+			}
+		}
+
+		log.Info("daily report sent", "tenant", p.TenantID, "recipients", len(sends))
+		return nil
 	}
 }
 
-// sendSlackWebhook sends a formatted message to Slack
-func sendSlackWebhook(webhookURL string, client *httpclient.Client, d *intel.DailySummary, subject, msg string) {
+// sendSlackWebhook sends a formatted message to Slack. Synchronous with the
+// job context: fire-and-forget goroutines outlive the job and swallow the
+// errors that would tell us the webhook died.
+func sendSlackWebhook(ctx context.Context, webhookURL string, client *httpclient.Client, d *intel.DailySummary, subject, msg string) error {
 	payload := map[string]any{
 		"text": subject,
 		"blocks": []map[string]any{
@@ -417,19 +470,26 @@ func sendSlackWebhook(webhookURL string, client *httpclient.Client, d *intel.Dai
 	}
 	
 	body, _ := json.Marshal(payload)
-	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, webhookURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, webhookURL, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
 	req.Header.Set("Content-Type", "application/json")
-	
+
 	resp, err := client.Do(req)
 	if err != nil {
-		// Log but don't fail
-		return
+		return err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("slack webhook: %s", resp.Status)
+	}
+	return nil
 }
 
-// sendTeamsWebhook sends a formatted message to Microsoft Teams
-func sendTeamsWebhook(webhookURL string, client *httpclient.Client, d *intel.DailySummary, subject, msg string) {
+// sendTeamsWebhook sends a formatted message to Microsoft Teams (same
+// synchronous discipline as Slack above).
+func sendTeamsWebhook(ctx context.Context, webhookURL string, client *httpclient.Client, d *intel.DailySummary, subject, msg string) error {
 	payload := map[string]any{
 		"@type":      "MessageCard",
 		"@context":   "http://schema.org/extensions",
@@ -467,14 +527,21 @@ func sendTeamsWebhook(webhookURL string, client *httpclient.Client, d *intel.Dai
 	}
 	
 	body, _ := json.Marshal(payload)
-	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, webhookURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, webhookURL, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
 	req.Header.Set("Content-Type", "application/json")
-	
+
 	resp, err := client.Do(req)
 	if err != nil {
-		return
+		return err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("teams webhook: %s", resp.Status)
+	}
+	return nil
 }
 
 // EnqueueDailyReports schedules daily summaries for all tenants (legacy name)

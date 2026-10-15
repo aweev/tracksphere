@@ -52,7 +52,7 @@ export default function RegisterPage() {
       <section className="auth-form-wrap">
       <div className="auth-card w-full max-w-md rounded-3xl bg-white p-8 shadow-2xl">
         <div className="mb-6 text-center">
-          <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-xl bg-accent-500 text-lg font-bold text-white">
+          <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-xl bg-accent-700 text-lg font-bold text-white">
             T
           </div>
           <h1 className="text-xl font-extrabold text-navy-950">Create your organization</h1>
@@ -92,7 +92,7 @@ export default function RegisterPage() {
           {error ? <p className="text-sm text-red-600">{error}</p> : null}
           <button
             disabled={busy}
-            className="w-full rounded-xl bg-accent-500 py-3 font-semibold text-white hover:bg-accent-600 disabled:opacity-50"
+            className="w-full rounded-xl bg-accent-700 py-3 font-semibold text-white hover:bg-accent-700-hover disabled:opacity-50"
           >
             {busy ? 'Creating…' : 'Create organization'}
           </button>

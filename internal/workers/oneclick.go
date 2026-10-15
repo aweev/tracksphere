@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -37,6 +38,12 @@ func getTenantBranding(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID) notif
 }
 
 // HandleNotifyCustomer sends a custom customer notification for a shipment.
+//
+// Transaction discipline mirrors the alert dispatcher: the tenant
+// transaction is DB-ONLY (claims + consent), provider Sends happen AFTER
+// commit via flushSends. The job nonce keys idempotency — a retry replays
+// the same nonce and re-claims instead of duplicating; two distinct
+// operator clicks carry distinct nonces and both deliver.
 func HandleNotifyCustomer(q *queue.Queue, log *slog.Logger) func(context.Context, []byte) error {
 	return func(ctx context.Context, body []byte) error {
 		var p struct {
@@ -46,15 +53,23 @@ func HandleNotifyCustomer(q *queue.Queue, log *slog.Logger) func(context.Context
 			Message     string    `json:"message"`
 			CustomerMsg string    `json:"customerMsg"`
 			IsCustom    bool      `json:"isCustom"`
+			Nonce       string    `json:"nonce"`
 		}
 		if err := json.Unmarshal(body, &p); err != nil {
 			return nil // poison payload — drop
+		}
+		if p.Nonce == "" {
+			// Jobs enqueued before nonces existed: the message text is the
+			// key. Same retry semantics, coarser grain.
+			p.Nonce = sendKey("notify.customer.legacy", p.TenantID.String(),
+				p.ShipmentID.String(), p.Title, p.Message, p.CustomerMsg)
 		}
 
 		// All reads run tenant-pinned: shipments, subscriptions and branding
 		// are FORCE RLS and fail closed (zero rows) without the pin, which
 		// used to make one-click sends silently no-op.
-		return db.WithTenant(ctx, q.Pool(), p.TenantID, func(tx pgx.Tx) error {
+		var sends []pendingSend
+		err := db.WithTenant(ctx, q.Pool(), p.TenantID, func(tx pgx.Tx) error {
 			// Get the shipment details
 			var trackingNumber, carrier, mode, origin, destination, status string
 			var eta *string
@@ -71,10 +86,15 @@ func HandleNotifyCustomer(q *queue.Queue, log *slog.Logger) func(context.Context
 			brand := getTenantBranding(ctx, tx, p.TenantID)
 			templateEngine := notify.NewTemplateEngine(brand)
 
-			// Get active subscriptions for this shipment
-			rows, err := tx.Query(ctx, `
-				SELECT channel, recipient FROM tracking_subscriptions
-				WHERE shipment_id=$1 AND status='active'`, p.ShipmentID)
+		// Get active subscriptions for this shipment. digest_only subscribers
+		// wait for the digest by promise — a one-click action is still an
+		// explicit human interrupt (ADR 0009 bypass), but it must not
+		// surprise a subscriber who asked never to be interrupted. The
+		// explicit per-recipient one-click path (HandleEmailCarrier) is the
+		// bypass; broadcast fan-out respects digest_only.
+		rows, err := tx.Query(ctx, `
+			SELECT channel, recipient FROM tracking_subscriptions
+			WHERE shipment_id=$1 AND status='active' AND NOT digest_only`, p.ShipmentID)
 			if err != nil {
 				return err
 			}
@@ -108,6 +128,7 @@ func HandleNotifyCustomer(q *queue.Queue, log *slog.Logger) func(context.Context
 						"channel", sub.Channel, "shipment", p.ShipmentID)
 					continue
 				}
+				// end metered-channel skip
 				subject := p.Title
 				msgBody := p.CustomerMsg
 				if msgBody == "" {
@@ -137,22 +158,32 @@ func HandleNotifyCustomer(q *queue.Queue, log *slog.Logger) func(context.Context
 					renderedBody = msgBody
 				}
 
-				if err := sender.Send(ctx, sub.Channel, sub.Recipient, subject, renderedBody); err != nil {
-					log.Warn("notify_customer: send failed", "channel", sub.Channel, "err", err)
+				// Claim in-transaction, transmit after commit. The nonce makes
+				// each operator click distinct and each retry identical.
+				ps := pendingSend{
+					TenantID: p.TenantID, ShipmentID: p.ShipmentID,
+					Channel: sub.Channel, To: sub.Recipient,
+					Subject: subject, Body: renderedBody,
+					Provider: sender.Name(),
+					DedupeKey: sendKey("notify.customer", p.Nonce, sub.Channel, sub.Recipient),
+				}
+				owned, _, err := claimSendTx(ctx, tx, ps)
+				if err != nil {
+					log.Warn("notify_customer: claim failed", "channel", sub.Channel, "err", err)
 					continue
 				}
-				// Record notification
-				if _, err := tx.Exec(ctx, `
-					INSERT INTO notifications (tenant_id, channel, recipient, subject, body, provider)
-					VALUES ($1,$2,$3,$4,$5,$6)`,
-					p.TenantID, sub.Channel, sub.Recipient, subject, renderedBody, sender.Name()); err != nil {
-					log.Warn("notify_customer: record failed", "err", err)
+				if owned {
+					sends = append(sends, ps)
 				}
 			}
 
-			log.Info("notify_customer: sent", "shipment", p.ShipmentID, "subscriptions", len(subs))
+			log.Info("notify_customer: claimed", "shipment", p.ShipmentID, "subscriptions", len(sends))
 			return nil
 		})
+		if err != nil {
+			return err
+		}
+		return flushSends(ctx, q.Pool(), log, sends)
 	}
 }
 
@@ -165,44 +196,48 @@ func HandleEmailCarrier(q *queue.Queue, log *slog.Logger) func(context.Context, 
 			Title      string    `json:"title"`
 			Message    string    `json:"message"`
 			Note       string    `json:"note"`
+			To         string    `json:"to"`
+			Nonce      string    `json:"nonce"`
 		}
 		if err := json.Unmarshal(body, &p); err != nil {
 			return nil // poison payload — drop
 		}
+		if strings.TrimSpace(p.To) == "" {
+			log.Warn("email_carrier: missing recipient, dropping", "shipment", p.ShipmentID)
+			return nil // malformed payload — retrying cannot produce an address
+		}
+		if p.Nonce == "" {
+			p.Nonce = sendKey("email.carrier.legacy", p.TenantID.String(),
+				p.ShipmentID.String(), p.Title, p.Message, p.Note, p.To)
+		}
 
-		// Tenant-pinned like HandleNotifyCustomer: carrier_credentials and
-		// shipments are FORCE RLS and read zero rows without the pin.
-		return db.WithTenant(ctx, q.Pool(), p.TenantID, func(tx pgx.Tx) error {
-			// Get the shipment details and carrier credentials
+		// Tenant-pinned like HandleNotifyCustomer: shipments is FORCE RLS
+		// and reads zero rows without the pin. Claim in-tx, Send after
+		// commit: the old code returned the Send error from inside the tx,
+		// so a delivered email with a failed commit retried into a duplicate.
+		var sends []pendingSend
+		err := db.WithTenant(ctx, q.Pool(), p.TenantID, func(tx pgx.Tx) error {
+			// Get the shipment details. pgx.ErrNoRows means the shipment is
+			// gone (nothing to do); any other error propagates so the job
+			// retries with the REAL error instead of a misleading log line
+			// followed by a poisoned-commit failure.
 			var trackingNumber, carrier, mode, origin, destination, status string
-			var carrierCredsJSON *string
 			err := tx.QueryRow(ctx, `
-				SELECT s.tracking_number, s.carrier, s.mode, s.origin, s.destination, s.status,
-				       cc.credentials
-				FROM shipments s
-				LEFT JOIN carrier_credentials cc ON cc.carrier = s.carrier AND cc.tenant_id = s.tenant_id
-				WHERE s.id=$1`, p.ShipmentID).
-				Scan(&trackingNumber, &carrier, &mode, &origin, &destination, &status, &carrierCredsJSON)
-			if err != nil {
-				log.Warn("email_carrier: shipment not found", "shipment", p.ShipmentID, "err", err)
+				SELECT tracking_number, carrier, mode, origin, destination, status
+				FROM shipments WHERE id=$1`, p.ShipmentID).
+				Scan(&trackingNumber, &carrier, &mode, &origin, &destination, &status)
+			if err == pgx.ErrNoRows {
+				log.Warn("email_carrier: shipment gone, dropping", "shipment", p.ShipmentID)
 				return nil
 			}
-
-			// Get carrier contact info from credentials
-			carrierEmail := ""
-			if carrierCredsJSON != nil {
-				var creds struct {
-					Email string `json:"email"`
-				}
-				_ = json.Unmarshal([]byte(*carrierCredsJSON), &creds)
-				carrierEmail = creds.Email
+			if err != nil {
+				return err
 			}
 
-			// Fallback: use a generic carrier email if available
-			if carrierEmail == "" {
-				// Try to get from tenant config or use a known pattern
-				carrierEmail = fmt.Sprintf("support@%s.com", carrier)
-			}
+			// Recipient is operator-typed (request-validated): sealed_creds
+			// holds API keys, not contacts, and fabricated support@ addresses
+			// would send real mail to guessed inboxes.
+			carrierEmail := strings.TrimSpace(p.To)
 
 			sender := notify.Default(log)
 
@@ -224,26 +259,35 @@ func HandleEmailCarrier(q *queue.Queue, log *slog.Logger) func(context.Context, 
 				trackingNumber, carrier, mode, origin, destination, status, nil,
 			)
 
-			if err := sender.Send(ctx, "email", carrierEmail, subject, emailBody); err != nil {
-				log.Warn("email_carrier: send failed", "carrier", carrier, "err", err)
+			ps := pendingSend{
+				TenantID: p.TenantID, ShipmentID: p.ShipmentID,
+				Channel: "email", To: carrierEmail,
+				Subject: subject, Body: emailBody,
+				Provider: sender.Name(),
+				DedupeKey: sendKey("email.carrier", p.Nonce, carrierEmail),
+			}
+			owned, _, err := claimSendTx(ctx, tx, ps)
+			if err != nil {
+				log.Warn("email_carrier: claim failed", "err", err)
 				return err
 			}
-
-			// Record the outbound notification
-			if _, err := tx.Exec(ctx, `
-				INSERT INTO notifications (tenant_id, channel, recipient, subject, body, provider)
-				VALUES ($1,'email',$2,$3,$4,$5)`,
-				p.TenantID, carrierEmail, subject, emailBody, sender.Name()); err != nil {
-				log.Warn("email_carrier: record failed", "err", err)
+			if owned {
+				sends = append(sends, ps)
 			}
 
-			log.Info("email_carrier: sent", "shipment", p.ShipmentID, "carrier", carrier, "to", carrierEmail)
+			log.Info("email_carrier: claimed", "shipment", p.ShipmentID, "carrier", carrier, "to", carrierEmail)
 			return nil
 		})
+		if err != nil {
+			return err
+		}
+		return flushSends(ctx, q.Pool(), log, sends)
 	}
 }
 
-// EnqueueNotifyCustomer queues a custom customer notification
+// EnqueueNotifyCustomer queues a custom customer notification. Each call
+// mints a nonce so the worker's idempotency key distinguishes two operator
+// clicks (both deliver) from two attempts of one job (one delivers).
 func EnqueueNotifyCustomer(q *queue.Queue, ctx context.Context, tenantID, shipmentID uuid.UUID, title, message, customerMsg string) error {
 	return q.EnqueueTenant(ctx, tenantID, NotifyCustomerJob, map[string]any{
 		"shipmentId":  shipmentID.String(),
@@ -252,16 +296,19 @@ func EnqueueNotifyCustomer(q *queue.Queue, ctx context.Context, tenantID, shipme
 		"message":     message,
 		"customerMsg": customerMsg,
 		"isCustom":    true,
+		"nonce":       uuid.NewString(),
 	}, time.Time{})
 }
 
-// EnqueueEmailCarrier queues a carrier email
-func EnqueueEmailCarrier(q *queue.Queue, ctx context.Context, tenantID, shipmentID uuid.UUID, title, message, note string) error {
+// EnqueueEmailCarrier queues a carrier email (nonce: see above).
+func EnqueueEmailCarrier(q *queue.Queue, ctx context.Context, tenantID, shipmentID uuid.UUID, title, message, note, to string) error {
 	return q.EnqueueTenant(ctx, tenantID, EmailCarrierJob, map[string]any{
 		"shipmentId": shipmentID.String(),
 		"tenantId":   tenantID.String(),
 		"title":      title,
 		"message":    message,
 		"note":       note,
+		"to":         to,
+		"nonce":      uuid.NewString(),
 	}, time.Time{})
 }

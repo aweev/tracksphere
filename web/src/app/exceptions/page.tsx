@@ -42,16 +42,18 @@ const SEVERITY_STYLES: Record<
 > = {
   // Severity is encoded by colour AND icon AND text, never colour alone: a
   // red border on its own is a WCAG 1.4.1 failure and invisible to anyone
-  // who cannot distinguish red from amber.
+  // who cannot distinguish red from amber. Colours come from the semantic
+  // @theme risk tokens (globals.css) — never hardcoded palettes — so risk
+  // means the same everywhere and dark mode follows automatically.
   critical: {
-    chip: 'bg-red-100 text-red-700',
-    border: 'border-l-red-500',
+    chip: 'bg-risk-critical-bg text-risk-critical',
+    border: 'border-l-risk-critical',
     icon: '▲',
     label: 'Critical',
   },
   warning: {
-    chip: 'bg-amber-100 text-amber-800',
-    border: 'border-l-amber-500',
+    chip: 'bg-risk-watch-bg text-risk-watch',
+    border: 'border-l-risk-watch',
     icon: '◆',
     label: 'Warning',
   },
@@ -104,6 +106,13 @@ function ExceptionsBody() {
   const [severity, setSeverity] = useState<SeverityFilter>('all');
   const [includeSnoozed, setIncludeSnoozed] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [lastResolved, setLastResolved] = useState<{
+    id: string;
+    title: string;
+    tracking: string;
+    shipmentId: string;
+    customerTold: boolean;
+  } | null>(null);
 
   const alertsKey = ['alerts', 'open', includeSnoozed];
   const {
@@ -146,7 +155,26 @@ function ExceptionsBody() {
   const resolve = useMutation({
     mutationFn: ({ id, rootCause, note }: { id: string; rootCause?: AlertRootCause; note?: string }) =>
       authApi.resolveAlert(id, { rootCause, note }),
-    onSuccess: refresh,
+    onSuccess: (_data, vars) => {
+      // Peak-end relief: the resolution moment must FEEL like competence.
+      // The resolved card unmounts on refresh, so the proof lives here — a
+      // transient banner with cause + customer state, auto-dismissed, never
+      // a dead end (links back to the shipment).
+      const done = (alerts ?? []).find((a) => a.id === vars.id);
+      setLastResolved(
+        done
+          ? {
+              id: done.id,
+              title: done.title,
+              tracking: done.trackingNumber ?? done.shipmentId,
+              shipmentId: done.shipmentId,
+              customerTold: done.customerNotified ?? false,
+            }
+          : null,
+      );
+      setExpanded(null);
+      refresh();
+    },
   });
 
   const assign = useMutation({
@@ -162,6 +190,19 @@ function ExceptionsBody() {
       rootCause?: AlertRootCause;
     }) => authApi.assignAlert(id, { userId, snoozeMinutes, rootCause }),
     onSuccess: refresh,
+  });
+
+  const { data: budget } = useQuery({
+    queryKey: ['notify-budget'],
+    queryFn: async () =>
+      (
+        await api.get<{
+          interruptHourlyCap: number;
+          interruptsUsed: number;
+          digestPending: number;
+        }>('/api/v1/notify/status')
+      ).data,
+    staleTime: 30_000,
   });
 
   const filtered = useMemo(
@@ -185,11 +226,22 @@ function ExceptionsBody() {
       <header className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-extrabold text-navy-950">Exceptions</h1>
-          <p className="text-sm text-slate-500">
+          <p className="text-sm text-slate-600">
             Worst first. <span className="font-semibold">{stats.unowned}</span> unowned ·{' '}
             <span className="font-semibold">{stats.breached}</span> past SLA ·{' '}
             <span className="font-semibold">{stats.untold}</span> customer not told
           </p>
+          {budget ? (
+            <p
+              className="mt-1 text-xs text-slate-600"
+              role="status"
+              aria-live="polite"
+              title="Non-interrupting notifications queue into a digest — suppressed never means dropped."
+            >
+              Interrupt budget: {budget.interruptsUsed}/{budget.interruptHourlyCap} used
+              {budget.digestPending > 0 ? ` · ${budget.digestPending} waiting in digest` : ' · digest clear'}
+            </p>
+          ) : null}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <div className="flex gap-2" role="group" aria-label="Severity filter">
@@ -220,6 +272,44 @@ function ExceptionsBody() {
           </label>
         </div>
       </header>
+
+      {lastResolved ? (
+        <div
+          className="ts-enter mb-4 flex flex-wrap items-center gap-3 rounded-2xl bg-risk-clear-bg p-4 ring-1 ring-risk-clear"
+          role="status"
+        >
+          <span
+            aria-hidden="true"
+            className="flex h-8 w-8 items-center justify-center rounded-full bg-risk-clear text-lg font-bold text-white"
+          >
+            ✓
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-bold text-navy-950">
+              Cleared — {lastResolved.title} ({lastResolved.tracking})
+            </p>
+            <p className="text-xs text-slate-600">
+              {lastResolved.customerTold
+                ? 'Customer was already notified — nothing left open.'
+                : 'Customer has not been told yet — send the update from the shipment.'}
+            </p>
+          </div>
+          <Link
+            href={`/shipments/${lastResolved.shipmentId}`}
+            className="rounded-xl bg-navy-950 px-3 py-2 text-xs font-semibold text-white"
+          >
+            Open shipment →
+          </Link>
+          <button
+            type="button"
+            onClick={() => setLastResolved(null)}
+            aria-label="Dismiss resolution confirmation"
+            className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-navy-950"
+          >
+            Dismiss
+          </button>
+        </div>
+      ) : null}
 
       {isLoading ? (
         <Card title="Loading exceptions…">
@@ -425,6 +515,7 @@ function TriagePanel({
 }) {
   const [cause, setCause] = useState<AlertRootCause>(alert.rootCause ?? 'other');
   const [note, setNote] = useState(alert.note ?? '');
+  const [carrierTo, setCarrierTo] = useState('');
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
   const customerUpdate = `Update on ${alert.trackingNumber ?? 'your shipment'}: ${alert.title} — ${alert.message}`;
@@ -447,13 +538,17 @@ function TriagePanel({
     }
   };
 
-  const emailCarrier = async (tracking: string, title: string, message: string, note: string) => {
+  const emailCarrier = async (tracking: string, title: string, message: string, note: string, to: string) => {
+    if (!to.trim()) {
+      setToast({ message: 'Type the carrier contact address first', type: 'error' });
+      return;
+    }
     try {
       const res = await fetch(`/api/v1/shipments/${alert.shipmentId}/email-carrier`, {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tracking, title, message, note }),
+        body: JSON.stringify({ tracking, title, message, note, to: to.trim() }),
       });
       if (res.ok) {
         setToast({ message: 'Carrier email queued', type: 'success' });
@@ -468,7 +563,7 @@ function TriagePanel({
   return (
     <div className="mt-4 space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
       {toast && (
-        <div className={`rounded-lg px-3 py-2 text-xs font-semibold ${toast.type === 'success' ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'}`}>
+        <div className={`rounded-lg px-3 py-2 text-xs font-semibold ${toast.type === 'success' ? 'bg-risk-clear-bg text-risk-clear' : 'bg-risk-critical-bg text-risk-critical'}`} role="status">
           {toast.message}
         </div>
       )}
@@ -536,6 +631,18 @@ function TriagePanel({
         />
       </label>
 
+      <label className="block text-xs font-semibold text-slate-700">
+        Carrier contact (email)
+        <input
+          value={carrierTo}
+          onChange={(e) => setCarrierTo(e.target.value)}
+          placeholder="ops@carrier.example"
+          type="email"
+          autoComplete="off"
+          className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-2 py-1.5 font-mono text-sm font-normal"
+        />
+      </label>
+
       <div className="flex flex-wrap items-center gap-2 pt-1">
         <button
           type="button"
@@ -572,7 +679,7 @@ function TriagePanel({
         <button
           type="button"
           disabled={busy}
-          onClick={() => emailCarrier(alert.trackingNumber ?? '', alert.title, alert.message, note.trim())}
+          onClick={() => emailCarrier(alert.trackingNumber ?? '', alert.title, alert.message, note.trim(), carrierTo)}
           className="rounded-xl bg-amber-600 px-4 py-2 text-xs font-semibold text-white disabled:opacity-50"
         >
           Email carrier

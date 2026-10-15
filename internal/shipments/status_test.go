@@ -131,3 +131,53 @@ func TestStatusRankOrdering(t *testing.T) {
 		t.Fatal("in_transit must not be terminal")
 	}
 }
+
+// Cancelled has no timestamp of its own: exits compare against the timeline
+// head. A newer event is a legitimate carrier retraction; anything older is
+// a replay. (Previously every exit from cancelled was a "replay", so real
+// un-cancels were swallowed and stale delivered_at survived cancel-exits.)
+func TestApplyStatus_NewerUncancelApplies(t *testing.T) {
+	last := ts(10)
+	st := IngestState{Status: model.StatusCancelled, LastEventAt: &last}
+
+	status, clearDelivered, stale := ApplyStatus(st, model.StatusInTransit, ts(30))
+	if status != model.StatusInTransit {
+		t.Fatalf("status = %q, want the carrier's newer un-cancel to apply", status)
+	}
+	if clearDelivered {
+		t.Fatal("nothing to clear: delivered_at was never set")
+	}
+	if stale {
+		t.Fatal("a newer event must not be flagged stale")
+	}
+}
+
+func TestApplyStatus_OlderEventDoesNotUncancel(t *testing.T) {
+	last := ts(30)
+	st := IngestState{Status: model.StatusCancelled, LastEventAt: &last}
+
+	status, clearDelivered, stale := ApplyStatus(st, model.StatusInTransit, ts(10))
+	if status != model.StatusCancelled {
+		t.Fatalf("status = %q, an older event must not un-cancel", status)
+	}
+	if clearDelivered {
+		t.Fatal("a replay must not clear anything")
+	}
+	if !stale {
+		t.Fatal("an older event than the timeline head must be flagged stale")
+	}
+}
+
+func TestApplyStatus_CancelExitClearsStaleDeliveredAt(t *testing.T) {
+	deliveredAt := ts(5)
+	last := ts(10)
+	st := IngestState{Status: model.StatusCancelled, DeliveredAt: &deliveredAt, LastEventAt: &last}
+
+	status, clearDelivered, stale := ApplyStatus(st, model.StatusInTransit, ts(30))
+	if status != model.StatusInTransit || stale {
+		t.Fatalf("status=%q stale=%v, want the newer correction to apply", status, stale)
+	}
+	if !clearDelivered {
+		t.Fatal("leaving cancelled with delivered_at set must clear it, not preserve incoherence")
+	}
+}

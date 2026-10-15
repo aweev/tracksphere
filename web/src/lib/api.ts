@@ -163,6 +163,7 @@ export interface ShipmentEvent {
 export type AlertSeverity = 'info' | 'warning' | 'critical';
 export type AlertKind =
   | 'delay'
+  | 'blank_sailing'
   | 'customs_hold'
   | 'port_congestion'
   | 'sla_breach'

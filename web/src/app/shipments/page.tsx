@@ -7,6 +7,7 @@ import { useSearchParams } from 'next/navigation';
 import { RequireAuth } from '@/components/RequireAuth';
 import { Card, Empty, RiskBadge, StatusPill } from '@/components/ui';
 import { RiskTooltip } from '@/components/RiskTooltip';
+import { EtaBadge } from '@/components/EtaBadge';
 import { api, type RiskBreakdown, type Shipment, type ShipmentStatus } from '@/lib/api';
 import { CreateShipmentForm } from '@/components/CreateShipmentForm';
 
@@ -128,7 +129,7 @@ function ShipmentsBody() {
         </div>
         <button
           onClick={() => setShowCreate((v) => !v)}
-          className="rounded-xl bg-accent-500 px-4 py-2.5 text-sm font-semibold text-white hover:bg-accent-600 focus-visible:ring-2 focus-visible:ring-accent-500"
+          className="rounded-xl bg-accent-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-accent-700-hover focus-visible:ring-2 focus-visible:ring-accent-500"
         >
           {showCreate ? 'Close' : '+ New shipment'}
         </button>
@@ -311,14 +312,10 @@ function ShipmentsBody() {
                           {s.eta ? (
                             <>
                               {new Date(s.eta).toLocaleString()}
-                              {s.etaSource && s.etaSource !== 'carrier' && (
-                                <span className="ml-1 font-sans text-[10px] font-bold uppercase text-amber-700" aria-label="Estimated ETA">
-                                  est
-                                </span>
-                              )}
+                              <EtaBadge source={s.etaSource} confidence={s.etaConfidence} />
                             </>
                           ) : (
-                            <span aria-label="No ETA available">—</span>
+                            <span className="font-sans text-xs">No ETA yet</span>
                           )}
                         </td>
                         <td className="py-3">
@@ -365,13 +362,13 @@ function ShipmentsBody() {
                         <StatusPill status={s.status} />
                       </span>
                     </div>
-                    {s.eta && (
+                    {s.eta ? (
                       <div className="shipment-card-eta">
                         Estimated arrival: <span className="shipment-card-eta-value">{new Date(s.eta).toLocaleString()}</span>
-                        {s.etaSource && s.etaSource !== 'carrier' && (
-                          <span className="ml-1 font-sans text-[10px] font-bold uppercase text-amber-700" aria-label="Estimated ETA">est</span>
-                        )}
+                        <EtaBadge source={s.etaSource} confidence={s.etaConfidence} />
                       </div>
+                    ) : (
+                      <div className="shipment-card-eta">No ETA yet — waiting on carrier ping</div>
                     )}
                     {s.staleHours && s.staleHours > 24 && (
                       <div className="mt-2 text-[11px] font-semibold text-orange-700" aria-label={`Silent for ${Math.round(s.staleHours)} hours`}>
@@ -384,7 +381,7 @@ function ShipmentsBody() {
                     <div className="shipment-card-actions">
                       <Link
                         href={`/shipments/${s.id}`}
-                        className="rounded-xl bg-accent-500 px-4 py-2 text-sm font-semibold text-white hover:bg-accent-600 focus-visible:ring-2 focus-visible:ring-accent-500"
+                        className="rounded-xl bg-accent-700 px-4 py-2 text-sm font-semibold text-white hover:bg-accent-700-hover focus-visible:ring-2 focus-visible:ring-accent-500"
                       >
                         View details
                       </Link>

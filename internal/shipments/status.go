@@ -116,13 +116,25 @@ func ApplyStatus(st IngestState, incoming string, occurredAt time.Time) (status 
 	}
 
 	// Terminal states need a timestamp comparison: only a NEWER carrier event
-	// may retract a delivery. An older one is a replay.
+	// may leave one. Delivered compares against delivered_at; cancelled has
+	// no timestamp of its own (there is no cancelled_at), so it compares
+	// against the timeline head — a newer event is a legitimate un-cancel
+	// (carrier retraction), an older-or-equal one is a replay. The old code
+	// required DeliveredAt unconditionally, which made EVERY exit from
+	// cancelled a "replay": legitimate un-cancels were swallowed, and a
+	// cancel-exit could never clear a stale delivered_at.
 	if verdict == TransitionTerminalExit {
-		if st.DeliveredAt == nil || !occurredAt.After(*st.DeliveredAt) {
+		anchor := st.DeliveredAt
+		if anchor == nil {
+			anchor = st.LastEventAt
+		}
+		if anchor == nil || !occurredAt.After(*anchor) {
 			return st.Status, false, true // replay: ignore
 		}
-		// Legitimate retraction.
-		return incoming, true, false
+		// Legitimate exit. Clear delivered_at whenever it is set: leaving
+		// delivered retracts it, and leaving cancelled with it set repairs
+		// an already-incoherent record instead of preserving it.
+		return incoming, st.DeliveredAt != nil, false
 	}
 
 	// Backwards along the lifecycle. If the shipment already has a newer event,

@@ -8,6 +8,7 @@
   --color-navy-800: #334155;
   --color-accent-500: #ff6b00;
   --color-accent-600: #e66000;
+  --color-accent-700: #b34a00;    /* solid-button bg — white text 5.9:1 AA */
 
   /* Semantic Risk Tiers (WCAG AA compliant on white) */
   --color-risk-critical: #b91c1c;    /* red-700 - 7.3:1 on white */
@@ -354,6 +355,39 @@ body {
   }
 }
 
+/* ── Sprint A motion tokens: every animation answers "what changed" ──
+ * ts-enter: a NEW timeline event slides in (150ms ease-out). Applied only to
+ *   ids unseen on first paint — initial page load never animates.
+ * ts-halo: a shipment that BECAME stale gets a soft pulsing distress ring.
+ *   Static ring under reduced motion (global rule above kills the pulse).
+ * ts-drop: a NEW checkpoint dot drops in on the shipment map (200ms).
+ * Map marker travel itself is a JS-driven CSS transition on the marker
+ * element (450ms ease-out, FleetMap/ShipmentMap), not a keyframe, so only
+ * moved dots move — change-blindness guard. Marker transitions are removed
+ * entirely when prefers-reduced-motion (dots jump instantly). */
+@keyframes ts-enter {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.ts-enter {
+  animation: ts-enter 150ms ease-out;
+}
+@keyframes ts-halo {
+  0% { opacity: 0.55; transform: scale(0.7); }
+  70% { opacity: 0; transform: scale(1.6); }
+  100% { opacity: 0; transform: scale(1.6); }
+}
+.ts-halo {
+  animation: ts-halo 2.4s ease-out infinite;
+}
+@keyframes ts-drop {
+  from { opacity: 0; transform: translateY(-10px) scale(0.6); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.ts-drop {
+  animation: ts-drop 200ms ease-out;
+}
+
 /* High contrast mode support */
 @media (prefers-contrast: high) {
   :root {
@@ -660,14 +694,15 @@ body,
 }
 
 .app-primary-action {
-  background: linear-gradient(135deg, #ed7a36, #dc5c20);
-  box-shadow: 0 5px 14px rgb(220 92 32 / 20%);
+  /* AA: white text needs ≥4.5:1 — the old #ed7a36→#dc5c20 gradient was ~3:1. */
+  background: linear-gradient(135deg, #c05a00, #a34a00);
+  box-shadow: 0 5px 14px rgb(163 74 0 / 25%);
   transition: transform 160ms ease, box-shadow 160ms ease, filter 160ms ease;
 }
 
 .app-primary-action:hover {
-  box-shadow: 0 8px 18px rgb(220 92 32 / 26%);
-  filter: saturate(1.08);
+  box-shadow: 0 8px 18px rgb(163 74 0 / 30%);
+  filter: brightness(1.06);
   transform: translateY(-1px);
 }
 

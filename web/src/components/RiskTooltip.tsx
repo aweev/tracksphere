@@ -72,19 +72,33 @@ export function RiskTooltip({
     <div
       className="relative inline-block"
       tabIndex={0}
+      role="button"
+      aria-describedby={isOpen ? 'risk-breakdown-tip' : undefined}
+      aria-label={`Risk score ${score} of 100. Activate for breakdown.`}
       onFocus={() => setIsOpen(true)}
       onBlur={() => setIsOpen(false)}
       onMouseEnter={() => setIsOpen(true)}
       onMouseLeave={() => setIsOpen(false)}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') setIsOpen(false);
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          setIsOpen((v) => !v);
+        }
+      }}
     >
       {children}
       {isOpen && (
-        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-50 min-w-[280px] max-w-[320px] rounded-xl bg-white p-4 shadow-lg ring-1 ring-slate-200 animate-in fade-in-0 zoom-in-95">
+        <div
+          id="risk-breakdown-tip"
+          role="tooltip"
+          className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-50 min-w-[280px] max-w-[320px] rounded-xl bg-white p-4 shadow-lg ring-1 ring-slate-200 animate-in fade-in-0 zoom-in-95"
+        >
           <div className="flex items-center justify-between mb-3">
             <h4 className="text-sm font-bold text-navy-950">Risk Score: {score}/100</h4>
             <button
               onClick={(e) => { e.stopPropagation(); setIsOpen(false); }}
-              className="text-slate-400 hover:text-slate-600"
+              className="text-slate-500 hover:text-slate-700"
               aria-label="Close tooltip"
             >
               ✕

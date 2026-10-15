@@ -7,8 +7,12 @@ import { RequireAuth } from '@/components/RequireAuth';
 import { BackLink, Card, Empty, StatusPill } from '@/components/ui';
 import { Row, Timeline } from '@/components/Timeline';
 import type { MapPoint } from '@/components/ShipmentMap';
-import { api, type AuditItem, type DocItem, type Leg, type Shipment, type ShipmentEvent } from '@/lib/api';
+import { api, type AuditItem, type DocItem, type Leg, type RiskBreakdown, type Shipment, type ShipmentEvent } from '@/lib/api';
 import { relativeTime } from '@/lib/format';
+import { useTrackedStream } from '@/lib/live';
+import { EtaBadge } from '@/components/EtaBadge';
+import { ConnectionDot, type ConnState } from '@/components/ConnectionDot';
+import { RiskTooltip } from '@/components/RiskTooltip';
 
 // MapLibre touches window at import → client-only, no SSR.
 const ShipmentMap = dynamic(() => import('@/components/ShipmentMap'), {
@@ -51,6 +55,10 @@ function ShipmentDetailBody({ id }: { id: string }) {
     queryKey: ['shipment', id, 'events'],
     queryFn: async () => (await api.get<ShipmentEvent[]>(`/api/v1/shipments/${id}/events`)).data,
   });
+  // SSE is hint, queries are truth: refresh this shipment + timeline when the
+  // tenant stream fires. (Previously this card claimed "real time" with no
+  // EventSource at all.)
+  const conn = useLiveShipment(id);
   const toggleVisibility = useMutation({
     mutationFn: async (next: boolean) =>
       (await api.patch<Shipment>(`/api/v1/shipments/${id}`, { isPublic: next })).data,
@@ -104,11 +112,11 @@ function ShipmentDetailBody({ id }: { id: string }) {
   };
 
   return (
-    <div className="p-8">
+    <div className="p-4 md:p-8">
       <BackLink href="/shipments">← Shipments</BackLink>
       <header className="mt-3 mb-6 flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h1 className="font-mono text-2xl font-extrabold text-navy-950">
+        <div className="min-w-0">
+          <h1 className="break-all font-mono text-2xl font-extrabold text-navy-950">
             {shipment.trackingNumber}
           </h1>
           <p className="text-sm text-slate-500">
@@ -119,17 +127,37 @@ function ShipmentDetailBody({ id }: { id: string }) {
             updated {relativeTime(shipment.updatedAt)} · {(events ?? []).length} checkpoints
           </p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <StatusPill status={shipment.status} />
+          {typeof shipment.riskScore === 'number' ? (
+            <RiskTooltip
+              score={shipment.riskScore}
+              breakdown={shipment.riskBreakdown ?? EMPTY_BREAKDOWN}
+            >
+              <span
+                className="inline-block cursor-help rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-navy-950 underline decoration-dotted underline-offset-2"
+                title="Why this risk? Open the score breakdown."
+              >
+                Risk {shipment.riskScore}/100
+              </span>
+            </RiskTooltip>
+          ) : null}
           {shipment.eta ? (
             <div className="text-right">
-              <div className="text-xs uppercase tracking-wide text-slate-400">ETA</div>
+              <div className="text-xs uppercase tracking-wide text-slate-500">ETA</div>
               <div className="font-mono text-sm font-semibold text-navy-950">
                 {new Date(shipment.eta).toLocaleString()}
+                <EtaBadge source={shipment.etaSource} confidence={shipment.etaConfidence} />
               </div>
-              <div className="text-xs text-slate-500">{relativeTime(shipment.eta)}</div>
+              <div className="text-xs text-slate-600">{relativeTime(shipment.eta)}</div>
             </div>
-          ) : null}
+          ) : (
+            <div className="text-right">
+              <div className="text-xs uppercase tracking-wide text-slate-500">ETA</div>
+              <div className="text-xs font-semibold text-navy-950">No ETA yet</div>
+              <div className="text-xs text-slate-600">waiting on first carrier ping</div>
+            </div>
+          )}
         </div>
       </header>
 
@@ -176,6 +204,7 @@ function ShipmentDetailBody({ id }: { id: string }) {
                   <button
                     type="button"
                     onClick={copyLink}
+                    aria-live="polite"
                     className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-navy-950"
                   >
                     {copied ? 'Copied!' : 'Copy tracking link'}
@@ -183,6 +212,7 @@ function ShipmentDetailBody({ id }: { id: string }) {
                   <button
                     type="button"
                     onClick={copyEmbed}
+                    aria-live="polite"
                     title="Snippet that embeds a live tracker on any https site (/widget.js)"
                     className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-navy-950"
                   >
@@ -201,12 +231,7 @@ function ShipmentDetailBody({ id }: { id: string }) {
             </p>
           </Card>
           <Card title="Live feed">
-            <p className="text-sm text-slate-600">
-              Carrier updates arrive here in real time — no refresh needed.
-            </p>
-            <p className="mt-2 font-mono text-xs text-slate-400">
-              SSE: /api/v1/stream · tenant-scoped
-            </p>
+            <LiveFeedState conn={conn} updatedAt={shipment.updatedAt} />
           </Card>
           <LegsCard shipmentId={id} />
           <DocumentsCard shipmentId={id} />
@@ -217,8 +242,7 @@ function ShipmentDetailBody({ id }: { id: string }) {
   );
 }
 
-function LegsCard({ shipmentId }: { shipmentId: string }) {
-  const qc = useQueryClient();
+function LegsCard({ shipmentId }: { shipmentId: string }) {  const qc = useQueryClient();
   const { data: legs } = useQuery({
     queryKey: ['shipment', shipmentId, 'legs'],
     queryFn: async () => (await api.get<Leg[]>(`/api/v1/shipments/${shipmentId}/legs`)).data,
@@ -357,10 +381,55 @@ function AuditCard({ shipmentId }: { shipmentId: string }) {
         {items.slice(0, 8).map((a, i) => (
           <li key={i} className="text-xs">
             <span className="font-semibold text-navy-950">{a.action}</span>
-            <span className="text-slate-500"> · {a.actor || 'system'} · {relativeTime(a.createdAt)}</span>
+            <span className="text-slate-600"> · {a.actor || 'system'} · {relativeTime(a.createdAt)}</span>
           </li>
         ))}
       </ul>
     </Card>
+  );
+}
+
+/** Zero breakdown for shipments the server has not scored yet. Never renders
+ *  as distrust — "not yet computed", not zero. */
+const EMPTY_BREAKDOWN: RiskBreakdown = {
+  dwell: 0,
+  slip: 0,
+  stale: 0,
+  critical: 0,
+  alerts: 0,
+  value: 0,
+  valueKnown: false,
+  relief: 0,
+};
+
+/**
+ * SSE-is-hint subscription for the detail view: on shipment.updated for this
+ * shipment, invalidate shipment + events so queries (truth) refetch. Tracks
+ * connection state for the Live feed card.
+ */
+function useLiveShipment(id: string) {
+  const queryClient = useQueryClient();
+  return useTrackedStream('/api/v1/stream', {
+    events: ['shipment.updated'],
+    onEvent: (_type, data) => {
+      if (data?.shipmentId && data.shipmentId !== id) return;
+      void queryClient.invalidateQueries({ queryKey: ['shipment', id] });
+      void queryClient.invalidateQueries({ queryKey: ['shipment', id, 'events'] });
+    },
+    onReconnect: () => {
+      void queryClient.invalidateQueries({ queryKey: ['shipment', id] });
+      void queryClient.invalidateQueries({ queryKey: ['shipment', id, 'events'] });
+    },
+  });
+}
+
+function LiveFeedState({ conn, updatedAt }: { conn: ConnState; updatedAt: string }) {
+  return (
+    <>
+      <ConnectionDot state={conn} updatedAt={updatedAt} />
+      <p className="mt-2 font-mono text-xs text-slate-500">
+        SSE is a hint · queries are truth · tenant-scoped
+      </p>
+    </>
   );
 }

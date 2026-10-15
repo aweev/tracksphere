@@ -5,7 +5,9 @@ import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { RequireAuth } from '@/components/RequireAuth';
 import { Card, Empty, StatTile, StatusPill } from '@/components/ui';
-import { api, type Alert, type DashboardStats, type Shipment } from '@/lib/api';
+import { api, type Alert, type DashboardStats, type RiskBreakdown, type Shipment } from '@/lib/api';
+import { EtaBadge } from '@/components/EtaBadge';
+import { RiskTooltip } from '@/components/RiskTooltip';
 
 // maplibre-gl is ~150 kB and touches `window` at import. Loading it eagerly
 // put the whole library in the dashboard's first-load JS for every user,
@@ -28,10 +30,22 @@ const RISK_LABELS: Record<string, string> = {
 };
 
 const RISK_STYLES: Record<string, string> = {
-  clear: 'bg-emerald-100 text-emerald-800',
-  watch: 'bg-amber-100 text-amber-800',
-  at_risk: 'bg-orange-100 text-orange-800',
-  critical: 'bg-red-100 text-red-700',
+  clear: 'bg-risk-clear-bg text-risk-clear',
+  watch: 'bg-risk-watch-bg text-risk-watch',
+  at_risk: 'bg-risk-at-risk-bg text-risk-at-risk',
+  critical: 'bg-risk-critical-bg text-risk-critical',
+};
+
+/** Zero breakdown for rows the server has not scored yet. */
+const EMPTY_BREAKDOWN: RiskBreakdown = {
+  dwell: 0,
+  slip: 0,
+  stale: 0,
+  critical: 0,
+  alerts: 0,
+  value: 0,
+  valueKnown: false,
+  relief: 0,
 };
 
 export default function DashboardPage() {
@@ -68,6 +82,12 @@ function DashboardBody() {
   const alerts = alertsPage?.alerts ?? [];
 
   const critical = alerts.filter((a) => a.severity === 'critical');
+  // Honest disruption overlay: shipment ids with an OPEN disruption-kind
+  // alert. No intel endpoint exists for the frontend, so the map rings what
+  // the exception engine actually flagged — never decorative zones.
+  const disruptedIds = alerts
+    .filter((a) => a.kind === 'disruption' && a.status !== 'resolved')
+    .map((a) => a.shipmentId);
 
   return (
     <div className="p-4 md:p-8">
@@ -78,7 +98,7 @@ function DashboardBody() {
             Control tower
           </div>
           <h1 className="mt-2 text-3xl font-extrabold text-navy-950">Operations overview</h1>
-          <p className="mt-1 text-sm text-slate-500">
+          <p className="mt-1 text-sm text-slate-600">
             A live pulse on every shipment moving through your network.
           </p>
         </div>
@@ -132,13 +152,13 @@ function DashboardBody() {
           action={
             <Link
               href="/shipments"
-              className="text-xs font-semibold text-accent-500 hover:underline"
+              className="text-xs font-semibold text-accent-700 hover:underline"
             >
               All shipments →
             </Link>
           }
         >
-          <FleetMap shipments={mapped ?? []} />
+          <FleetMap shipments={mapped ?? []} disruptedIds={disruptedIds} />
         </Card>
       </div>
 
@@ -161,25 +181,42 @@ function DashboardBody() {
                               {s.trackingNumber}
                             </span>
                             {tier !== 'clear' ? (
-                              <span
-                                className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${RISK_STYLES[tier]}`}
+                              <RiskTooltip
+                                score={s.riskScore ?? 0}
+                                breakdown={s.riskBreakdown ?? EMPTY_BREAKDOWN}
                               >
-                                {RISK_LABELS[tier]}
-                                {s.riskScore ? ` · ${s.riskScore}` : ''}
-                              </span>
+                                <span
+                                  className={`cursor-help rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide underline decoration-dotted underline-offset-2 ${RISK_STYLES[tier]}`}
+                                  title="Why this risk? Open the score breakdown."
+                                >
+                                  {RISK_LABELS[tier]}
+                                  {s.riskScore ? ` · ${s.riskScore}` : ''}
+                                </span>
+                              </RiskTooltip>
                             ) : null}
                             {s.customerNotified ? (
                               <span className="text-[10px] font-semibold text-emerald-700">
                                 Customer told
                               </span>
                             ) : tier !== 'clear' ? (
-                              <span className="text-[10px] font-semibold text-slate-500">
+                              <span className="text-[10px] font-semibold text-slate-600">
                                 Customer not told
                               </span>
                             ) : null}
                           </div>
-                          <div className="text-xs text-slate-500">
+                          <div className="text-xs text-slate-600">
                             {s.origin} → {s.destination} · {s.carrier}
+                            {s.eta ? (
+                              <>
+                                {' · ETA '}
+                                <span className="font-mono">
+                                  {new Date(s.eta).toLocaleDateString()}
+                                </span>
+                                <EtaBadge source={s.etaSource} confidence={s.etaConfidence} />
+                              </>
+                            ) : (
+                              ' · No ETA yet'
+                            )}
                             {s.staleHours && s.staleHours > 24
                               ? ` · no scan ${Math.round(s.staleHours)}h`
                               : ''}
@@ -211,7 +248,7 @@ function DashboardBody() {
           action={
             <Link
               href="/exceptions"
-              className="text-xs font-semibold text-accent-500 hover:underline"
+              className="text-xs font-semibold text-accent-700 hover:underline"
             >
               Open queue →
             </Link>
@@ -224,9 +261,9 @@ function DashboardBody() {
                   key={a.id}
                   className={`rounded-2xl border-l-4 p-3 ${
                     a.severity === 'critical'
-                      ? 'border-red-500 bg-red-50'
+                      ? 'border-risk-critical bg-risk-critical-bg'
                       : a.severity === 'warning'
-                        ? 'border-amber-500 bg-amber-50'
+                        ? 'border-risk-watch bg-risk-watch-bg'
                         : 'border-blue-500 bg-blue-50'
                   }`}
                 >
@@ -234,10 +271,10 @@ function DashboardBody() {
                     <span
                       className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold uppercase ${
                         a.severity === 'critical'
-                          ? 'bg-red-600 text-white'
+                          ? 'bg-risk-critical text-white'
                           : a.severity === 'warning'
-                            ? 'bg-amber-500 text-white'
-                            : 'bg-blue-500 text-white'
+                            ? 'bg-risk-at-risk text-white'
+                            : 'bg-blue-600 text-white'
                       }`}
                     >
                       {a.severity}
@@ -258,7 +295,7 @@ function DashboardBody() {
                   </div>
                   <Link
                     href={`/shipments/${a.shipmentId}`}
-                    className="mt-1 inline-block text-xs font-semibold text-accent-500 hover:underline"
+                    className="mt-1 inline-block text-xs font-semibold text-accent-700 hover:underline"
                   >
                     Open shipment →
                   </Link>

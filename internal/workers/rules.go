@@ -95,8 +95,13 @@ func evaluateRules(status, code string) []ruleOutcome {
 			Message: "Carrier published a new estimated time of arrival.",
 		})
 	case "BLANK_SAILING":
+		// Kind is distinct from the generic carrier-exception "delay" below:
+		// both outcomes share the partial unique index
+		// (shipment_id, kind) WHERE status='open', so reusing "delay" here
+		// would silently drop one alert + one notify on a blank sailing
+		// that also carries an exception status.
 		out = append(out, ruleOutcome{
-			Kind: "delay", Severity: "critical",
+			Kind: "blank_sailing", Severity: "critical",
 			Title:   "Blank sailing",
 			Message: "Carrier cancelled the scheduled service. Rebooking is now urgent.",
 		})
@@ -169,6 +174,7 @@ func HandleEvaluateRules(pool *pgxpool.Pool, log *slog.Logger) func(context.Cont
 
 			for _, o := range outcomes {
 				var inserted bool
+				var alertID uuid.UUID
 				var dueAt *time.Time
 				if err := tx.QueryRow(ctx, `
 					INSERT INTO alerts
@@ -180,9 +186,9 @@ func HandleEvaluateRules(pool *pgxpool.Pool, log *slog.Logger) func(context.Cont
 					ON CONFLICT (shipment_id, kind) WHERE status='open' DO UPDATE
 						SET last_seen_at = now(),
 						    acknowledged_at = COALESCE(alerts.acknowledged_at, now())
-					RETURNING (xmax = 0), due_at`,
+					RETURNING id, (xmax = 0), due_at`,
 					p.TenantID, p.ShipmentID, o.Kind, o.Severity, o.Title, o.Message).
-					Scan(&inserted, &dueAt); err != nil {
+					Scan(&alertID, &inserted, &dueAt); err != nil {
 					return err
 				}
 				if !inserted {
@@ -193,7 +199,7 @@ func HandleEvaluateRules(pool *pgxpool.Pool, log *slog.Logger) func(context.Cont
 				// Only a critical alert may request an interruption, and even
 				// then the dispatcher's budget decides.
 				interrupt := o.Severity == "critical"
-				if err := enqueueAlertNotify(ctx, tx, p.TenantID, p.ShipmentID,
+				if err := enqueueAlertNotify(ctx, tx, p.TenantID, p.ShipmentID, alertID,
 					o.Severity, interrupt, o.Kind); err != nil {
 					return err
 				}

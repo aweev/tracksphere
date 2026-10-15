@@ -1,9 +1,12 @@
 'use client';
 
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useState, type FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
 import Link from 'next/link';
 import { Card, Empty, StatusPill } from '@/components/ui';
+import { EtaBadge } from '@/components/EtaBadge';
+import { ConnectionDot } from '@/components/ConnectionDot';
+import { useTrackedStream } from '@/lib/live';
 import { Timeline } from '@/components/Timeline';
 import { api, RequestError, type PublicTracking } from '@/lib/api';
 
@@ -23,32 +26,20 @@ export function PublicTrack({ initial }: { initial: string }) {
   // until this existed it was a one-shot snapshot — the most-demoed screen in
   // the product was the only one that never moved. The stream is scoped server
   // side to exactly this shipment, so an anonymous visitor cannot observe anyone
-  // else's events.
-  const [liveAt, setLiveAt] = useState<string | null>(null);
-  useEffect(() => {
-    if (!tracking) return;
-    let es: EventSource | null = null;
-    let closed = false;
-    const open = () => {
-      es = new EventSource(
-        `/api/v1/track/${encodeURIComponent(tracking)}/stream`,
-      );
-      es.addEventListener('shipment.updated', () => {
-        void qc.invalidateQueries({ queryKey: ['track', tracking] });
-        setLiveAt(new Date().toLocaleTimeString());
-      });
-      es.onerror = () => {
-        if (es?.readyState === EventSource.CLOSED && !closed) {
-          setTimeout(open, 3000);
-        }
-      };
-    };
-    open();
-    return () => {
-      closed = true;
-      es?.close();
-    };
-  }, [tracking, qc]);
+  // else's events. Tracked: connection state drives the dot, and a reconnect
+  // refetches (Last-Event-ID resumes the stream; the refetch closes any gap).
+  const streamUrl = tracking
+    ? `/api/v1/track/${encodeURIComponent(tracking)}/stream`
+    : null;
+  const conn = useTrackedStream(streamUrl, {
+    events: ['shipment.updated'],
+    onEvent: () => {
+      void qc.invalidateQueries({ queryKey: ['track', tracking] });
+    },
+    onReconnect: () => {
+      void qc.invalidateQueries({ queryKey: ['track', tracking] });
+    },
+  });
 
   const onSubmit = (e: FormEvent) => {
     e.preventDefault();
@@ -77,14 +68,10 @@ export function PublicTrack({ initial }: { initial: string }) {
         <p className="mt-1 text-sm text-slate-600">
           Track your shipment in real time
         </p>
-        {liveAt ? (
-          // Polite live region: assistive tech hears updates without the page
-          // shouting. aria-live was entirely absent, so the "live" product was
-          // silent for screen-reader users.
-          <p aria-live="polite" className="mt-1 text-xs text-emerald-700" role="status">
-            <span className="mr-1 inline-block h-1.5 w-1.5 rounded-full bg-emerald-600 align-middle" aria-hidden="true" />
-            Live · last update {liveAt}
-          </p>
+        {tracking ? (
+          <div className="mt-2 flex justify-center">
+            <ConnectionDot state={conn} updatedAt={data?.lastUpdate} />
+          </div>
         ) : null}
       </header>
 
@@ -101,7 +88,7 @@ export function PublicTrack({ initial }: { initial: string }) {
         />
         <button
           type="submit"
-          className="rounded-2xl bg-accent-500 px-6 py-3.5 font-semibold text-white hover:bg-accent-600 focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2"
+          className="rounded-2xl bg-accent-700 px-6 py-3.5 font-semibold text-white hover:bg-accent-700-hover focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2"
         >
           {isFetching ? '…' : 'Track'}
         </button>
@@ -133,17 +120,17 @@ export function PublicTrack({ initial }: { initial: string }) {
             </div>
             {data.eta ? (
               <div className="mt-3 rounded-xl bg-slate-50 p-3 text-sm text-slate-600">
-                Estimated arrival:{' '}
+                {data.etaSource === 'carrier' ? 'Arriving' : 'Estimated arrival'}:{' '}
                 <span className="font-mono font-semibold text-navy-950">
                   {new Date(data.eta).toLocaleString()}
                 </span>
-                {data.etaSource && data.etaSource !== 'carrier' && (
-                  <span className="ml-1 font-sans text-[10px] font-bold uppercase text-amber-700" aria-label="Estimated ETA">
-                    est
-                  </span>
-                )}
+                <EtaBadge source={data.etaSource} />
               </div>
-            ) : null}
+            ) : (
+              <div className="mt-3 rounded-xl bg-slate-50 p-3 text-sm text-slate-600">
+                No arrival date yet — we show it here as soon as the carrier publishes one.
+              </div>
+            )}
           </Card>
           <Card title={`Journey (${data.events.length} checkpoints)`}>
             {data.events.length > 0 ? (

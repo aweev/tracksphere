@@ -1,3 +1,4 @@
+import { useRef } from 'react';
 import type { ShipmentEvent } from '@/lib/api';
 import { relativeTime } from '@/lib/format';
 
@@ -49,12 +50,29 @@ export function Timeline({
   events: ShipmentEvent[];
   audience?: 'ops' | 'customer';
 }) {
+  // Entrance motion with meaning only (change-blindness guard): ids present
+  // on first paint are the baseline and never animate; ids that ARRIVE later
+  // (SSE refetch) slide in over 150ms so the operator's eye lands on exactly
+  // what changed. No layout shift: the item occupies its final box from
+  // frame one, opacity/offset only.
+  const seenRef = useRef<Set<string> | null>(null);
+  if (seenRef.current === null) {
+    seenRef.current = new Set(events.map((e) => e.id));
+  }
+  const seen = seenRef.current;
+  const fresh = new Set<string>();
+  for (const e of events) {
+    if (!seen.has(e.id)) {
+      fresh.add(e.id);
+      seen.add(e.id);
+    }
+  }
   return (
     <ol className="relative ml-3 space-y-6 border-l-2 border-slate-200 pl-6" aria-label="Shipment timeline">
       {[...events].reverse().map((e) => {
         const c = copyFor(e.code);
         return (
-          <li key={e.id} className="relative">
+          <li key={e.id} className={`relative${fresh.has(e.id) ? ' ts-enter' : ''}`}>
             <span
               aria-hidden="true"
               className={`absolute -left-[31px] top-1 flex h-3 w-3 items-center justify-center rounded-full text-[8px] ring-4 ring-white ${
