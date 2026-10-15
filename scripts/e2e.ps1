@@ -237,8 +237,10 @@ $notify = Api "/api/v1/shipments/$shipmentId/notify" 'Post' @{ tracking = $track
 Check ($notify.StatusCode -eq 200) 'one-click customer notify queues (admin route live)'
 $notifyMember = Api "/api/v1/shipments/$shipmentId/notify" 'Post' @{ tracking = $tracking; title = 'x'; message = 'y'; customerUpdate = 'z' } $agentLogin.Header
 Check ($notifyMember.StatusCode -eq 403) 'member gets 403 on triage notify (admin-only)'
-$carrierMail = Api "/api/v1/shipments/$shipmentId/email-carrier" 'Post' @{ tracking = $tracking; title = 'E2E'; message = 'm'; note = 'n' } $login.Header
+$carrierMail = Api "/api/v1/shipments/$shipmentId/email-carrier" 'Post' @{ tracking = $tracking; title = 'E2E'; message = 'm'; note = 'n'; to = 'ops@example.com' } $login.Header
 Check ($carrierMail.StatusCode -eq 200) 'one-click carrier email queues (admin route live)'
+$carrierNoTo = Api "/api/v1/shipments/$shipmentId/email-carrier" 'Post' @{ tracking = $tracking; title = 'E2E'; message = 'm'; note = 'n' } $login.Header
+Check ($carrierNoTo.StatusCode -eq 400) 'carrier email without recipient rejected (no guessed addresses)'
 
 $mcp = Api '/api/v1/mcp' 'Post' @{ jsonrpc = '2.0'; id = 1; method = 'tools/list' } $login.Header
 Check ($mcp.StatusCode -eq 404) 'MCP 404s while TRACKSPHERE_MCP_ENABLED=0 (no phantom surface)'

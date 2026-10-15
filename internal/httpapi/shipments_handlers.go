@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -10,6 +11,22 @@ import (
 	"github.com/tracksphere/tracksphere/internal/model"
 	"github.com/tracksphere/tracksphere/internal/shipments"
 )
+
+// validateEmail applies the same inbox rules as subscription recipients:
+// present, single @, no spaces, bounded length.
+func validateEmail(recipient string) error {
+	if recipient == "" {
+		return errors.New("recipient required")
+	}
+	at := strings.LastIndex(recipient, "@")
+	if at <= 0 || at == len(recipient)-1 || strings.Contains(recipient, " ") {
+		return errors.New("valid email address required")
+	}
+	if len(recipient) > 254 {
+		return errors.New("email address too long")
+	}
+	return nil
+}
 
 type createShipmentRequest struct {
 	TrackingNumber string `json:"trackingNumber"`
@@ -236,6 +253,11 @@ type emailCarrierRequest struct {
 	Title    string `json:"title"`
 	Message  string `json:"message"`
 	Note     string `json:"note"`
+	// To is the carrier contact address, typed by the operator. There is no
+	// credential-stored email (sealed_creds holds API keys, not contacts),
+	// and guessing support@{carrier}.com would send real mail to fabricated
+	// addresses — explicit addressing only.
+	To string `json:"to"`
 }
 
 func (s *Server) handleEmailCarrier(w http.ResponseWriter, r *http.Request) {
@@ -248,13 +270,17 @@ func (s *Server) handleEmailCarrier(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &req) {
 		return
 	}
+	if err := validateEmail(req.To); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_input", "valid carrier email (to) required")
+		return
+	}
 	user := currentUser(r)
 	ship, err := s.shipments.Get(r.Context(), user.TenantID, id)
 	if err != nil {
 		s.domainError(w, err)
 		return
 	}
-	err = s.svc.EmailCarrier(r.Context(), user.TenantID, ship.ID, req.Title, req.Message, req.Note)
+	err = s.svc.EmailCarrier(r.Context(), user.TenantID, ship.ID, req.Title, req.Message, req.Note, req.To)
 	if err != nil {
 		s.domainError(w, err)
 		return

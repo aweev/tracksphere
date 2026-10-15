@@ -299,13 +299,20 @@ func (s *Service) ingestTx(ctx context.Context, fn func(pgx.Tx) error) error {
 // "send", so rate-limiting their keystroke would be the bug. Automated paths
 // must still go through DecideRoute.
 func (s *Service) NotifyCustomer(ctx context.Context, tenantID, shipmentID uuid.UUID, title, message, customerMsg string) error {
-	// Verify shipment exists and belongs to tenant
+	// Verify shipment exists and belongs to tenant. Must run tenant-pinned:
+	// shipments is FORCE RLS and an unpinned EXISTS check fails closed (zero
+	// rows), which used to turn every one-click send into a false 500.
 	var exists bool
-	err := s.pool.QueryRow(ctx, `
-		SELECT EXISTS(SELECT 1 FROM shipments WHERE id=$1 AND tenant_id=$2)`,
-		shipmentID, tenantID).Scan(&exists)
-	if err != nil || !exists {
-		return fmt.Errorf("shipment not found")
+	err := db.WithTenant(ctx, s.pool, tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`SELECT EXISTS(SELECT 1 FROM shipments WHERE id=$1)`,
+			shipmentID).Scan(&exists)
+	})
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return ErrNotFound
 	}
 	
 	// Queue a customer notification job
@@ -323,13 +330,20 @@ func (s *Service) NotifyCustomer(ctx context.Context, tenantID, shipmentID uuid.
 // EmailCarrier queues an email to the carrier for a shipment.
 // This is used for one-click carrier communication from the exceptions triage panel.
 // Same budget exemption as NotifyCustomer: explicit human action.
-func (s *Service) EmailCarrier(ctx context.Context, tenantID, shipmentID uuid.UUID, title, message, note string) error {
+func (s *Service) EmailCarrier(ctx context.Context, tenantID, shipmentID uuid.UUID, title, message, note, to string) error {
+	// Tenant-pinned like NotifyCustomer: unpinned reads fail closed under
+	// FORCE RLS and must never surface as a false 500.
 	var exists bool
-	err := s.pool.QueryRow(ctx, `
-		SELECT EXISTS(SELECT 1 FROM shipments WHERE id=$1 AND tenant_id=$2)`,
-		shipmentID, tenantID).Scan(&exists)
-	if err != nil || !exists {
-		return fmt.Errorf("shipment not found")
+	err := db.WithTenant(ctx, s.pool, tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`SELECT EXISTS(SELECT 1 FROM shipments WHERE id=$1)`,
+			shipmentID).Scan(&exists)
+	})
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return ErrNotFound
 	}
 	
 	jobPayload := map[string]any{
@@ -338,6 +352,7 @@ func (s *Service) EmailCarrier(ctx context.Context, tenantID, shipmentID uuid.UU
 		"title":        title,
 		"message":      message,
 		"note":         note,
+		"to":           to,
 	}
 	return s.queue.EnqueueTenant(ctx, tenantID, "shipment.email_carrier", jobPayload, time.Time{})
 }

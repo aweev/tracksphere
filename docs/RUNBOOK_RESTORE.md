@@ -21,7 +21,7 @@
 
 | Date | Tester | Restore source | RTO | RPO | RLS proof | Gaps |
 |---|---|---|---|---|---|---|
-| _none yet_ | | | | | | _this row is the gate_ |
+| 2026-10-08 | opencode (agent drill, local PG16) | `pg_dump -Fc` 168KB `sha256:0c4edf8a…cf493` → fresh DB `tracksphere_restore2` | ~45s (dump 0s + restore 42s + verify) | 0 (backup at proof end) | 9/9 RLS as app role + schema pass on restored copy; API served login + portal from restored DB | Drill used pg_dump, not pgBackRest PITR (SEV-3 path still doc-only); backup sidecar not yet run in compose; `statusz` correctly `degraded` with zero proven backups |
 
 ---
 
