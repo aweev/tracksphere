@@ -261,8 +261,7 @@ function ShipmentsBody() {
           </div>
         ) : shipments.length > 0 ? (
           <>
-            {/* Desktop Table View */}
-            <div className="shipment-table overflow-x-auto">
+            {/* Desktop Table View */}            <div className="shipment-table overflow-x-auto">
               <table className="w-full min-w-[900px] text-left text-sm" role="grid" aria-label="Shipments list">
                 <thead>
                   <tr className="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-500">
@@ -390,8 +389,37 @@ function ShipmentsBody() {
                 ))}
             </div>
           </>
+        ) : total === 0 && !status && !carrier && !mode && !riskTier && !search ? (
+          <FirstRunEmpty onCreate={() => setShowCreate(true)} />
         ) : (
-          <Empty message="No shipments match this filter." />
+          <Empty
+            message={`No shipments match ${[
+              search && `"${search}"`,
+              status && `status ${status.replace('_', ' ')}`,
+              carrier && `carrier ${carrier}`,
+              mode && `mode ${mode}`,
+              riskTier && `risk ${riskTier.replace('_', ' ')}`,
+            ]
+              .filter(Boolean)
+              .join(' · ')}.`}
+            detail="Filters combine — widen one to see more."
+            actions={
+              <button
+                type="button"
+                onClick={() => {
+                  setSearch('');
+                  setStatus('');
+                  setCarrier('');
+                  setMode('');
+                  setRiskTier('');
+                  setPage(0);
+                }}
+                className="rounded-xl bg-navy-950 px-4 py-2 text-sm font-semibold text-white"
+              >
+                Clear filters
+              </button>
+            }
+          />
         )}
       </Card>
 
@@ -416,6 +444,60 @@ function ShipmentsBody() {
           Next →
         </button>
       </nav>
+    </div>
+  );
+}
+
+/** Zero dead-ends: a tenant with no shipments gets the two fastest paths to
+ *  data (manual create, carrier webhook) plus the exact curl to prove the
+ *  pipe works — ambiguity aversion kills onboarding faster than any bug. */
+function FirstRunEmpty({ onCreate }: { onCreate: () => void }) {
+  const [showCurl, setShowCurl] = useState(false);
+  const curl = `curl -X POST $API/api/v1/webhooks/carriers/maersk \\
+  -H 'Content-Type: application/json' \\
+  -H "X-TrackSphere-Signature: sha256=<hmac-of-body>" \\
+  -d '{"tracking_number":"TS-DEMO-001","event_id":"evt-1",
+       "code":"DEPARTED","status":"in_transit",
+       "occurred_at":"2026-10-15T08:00:00Z"}'`;
+  return (
+    <div>
+      <Empty
+        message="No shipments yet — your control tower is wired and waiting."
+        detail="Create one manually, or push a carrier webhook. First data usually lands in under a minute."
+        actions={
+          <>
+            <button
+              type="button"
+              onClick={onCreate}
+              className="rounded-xl bg-accent-700 px-4 py-2 text-sm font-semibold text-white hover:bg-accent-700-hover"
+            >
+              Create shipment
+            </button>
+            <Link
+              href="/integrations"
+              className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-navy-950 hover:bg-slate-50"
+            >
+              Connect carrier →
+            </Link>
+            <button
+              type="button"
+              onClick={() => setShowCurl((v) => !v)}
+              aria-expanded={showCurl}
+              className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-navy-950 hover:bg-slate-50"
+            >
+              {showCurl ? 'Hide webhook curl' : 'Send test webhook'}
+            </button>
+          </>
+        }
+      />
+      {showCurl ? (
+        <pre className="mt-3 overflow-x-auto rounded-xl bg-navy-950 p-4 font-mono text-xs text-slate-100">
+          {curl}
+          {`
+# HMAC secret lives in Settings → Developers → Webhooks.
+# Replace $API with your deployment origin.`}
+        </pre>
+      ) : null}
     </div>
   );
 }

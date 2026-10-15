@@ -8,6 +8,7 @@ import { Card, Empty, StatTile, StatusPill } from '@/components/ui';
 import { api, type Alert, type DashboardStats, type RiskBreakdown, type Shipment } from '@/lib/api';
 import { EtaBadge } from '@/components/EtaBadge';
 import { RiskTooltip } from '@/components/RiskTooltip';
+import { OnboardingChecklist } from '@/components/OnboardingChecklist';
 
 // maplibre-gl is ~150 kB and touches `window` at import. Loading it eagerly
 // put the whole library in the dashboard's first-load JS for every user,
@@ -112,6 +113,9 @@ function DashboardBody() {
 
       {/* KPI row. Counts alone are not information — each tile carries the
           action it implies. */}
+      <div className="mb-6">
+        <OnboardingChecklist />
+      </div>
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
         <StatTile
           label="Active"

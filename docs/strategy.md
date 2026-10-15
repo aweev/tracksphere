@@ -115,6 +115,12 @@ Concretely today:
   integrations with Maersk or DHL.
 - **No uptime SLA is claimed.** There is no SLO yet; ADR 0007/0008 gave the
   observability to build one.
+- The empty exception queue proves it is watched: `GET /api/v1/alerts` carries
+  `readModelAt` (max `shipment_current.updated_at`), rendered as "read model
+  fresh as of Xm ago" — absent before the first sweep, never faked.
+- The setup guide's "simulate customs hold" fires a **real manual scan**
+  (`POST /shipments/{id}/events`, admin-only) through the event engine — a
+  genuine critical alert, not a demo banner.
 
 ## Roadmap
 

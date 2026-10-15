@@ -245,6 +245,8 @@ export interface Alert {
 export interface AlertPage {
   alerts: Alert[];
   nextCursor?: string;
+  /** Max shipment_current.updated_at at serve time. Absent = nothing scored yet. */
+  readModelAt?: string;
 }
 
 export interface NotificationItem {

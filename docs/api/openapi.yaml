@@ -1249,6 +1249,13 @@ components:
           type: array
           items: { $ref: '#/components/schemas/Alert' }
         nextCursor: { type: string }
+        readModelAt:
+          type: string
+          format: date-time
+          description: >
+            Freshness of the read model at serve time (max
+            shipment_current.updated_at). Powers the empty-queue trust line.
+            Absent when nothing is scored yet.
 
     Leg:
       type: object

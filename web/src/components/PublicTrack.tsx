@@ -118,6 +118,11 @@ export function PublicTrack({ initial }: { initial: string }) {
               </div>
               <StatusPill status={data.status} />
             </div>
+            {brand?.company ? (
+              <p className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-risk-clear-bg px-2.5 py-1 text-[11px] font-bold text-risk-clear">
+                <span aria-hidden="true">✓</span> Verified by {brand.company} — live tracking they operate
+              </p>
+            ) : null}
             {data.eta ? (
               <div className="mt-3 rounded-xl bg-slate-50 p-3 text-sm text-slate-600">
                 {data.etaSource === 'carrier' ? 'Arriving' : 'Estimated arrival'}:{' '}
@@ -185,14 +190,18 @@ function SubscribeCard({ tracking, accent }: { tracking: string; accent: string 
             <>
               Almost there — check your {channel === 'email' ? 'inbox' : 'messages'} and
               confirm to start receiving updates for{' '}
-              <span className="font-mono font-semibold">{tracking}</span>.
+              <span className="font-mono font-semibold">{tracking}</span>. Nothing
+              is sent until you confirm; opt-out works from any message, anytime.
             </>
           ) : (
             <>
               You are subscribed — updates for{' '}
               <span className="font-mono font-semibold">{tracking}</span> are on the way.
             </>
-          )}
+          )}{' '}
+          <span className="text-slate-500">
+            {channel === 'email' ? 'Email confirmed' : 'Number confirmed'} · opt-out works from any message, anytime.
+          </span>
         </p>
       </Card>
     );

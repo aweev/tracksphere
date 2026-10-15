@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
+	"github.com/tracksphere/tracksphere/internal/db"
 	"github.com/tracksphere/tracksphere/internal/model"
 	"github.com/tracksphere/tracksphere/internal/realtime"
 )
@@ -197,6 +199,27 @@ func (s *Server) handleListAlerts(w http.ResponseWriter, r *http.Request) {
 	out := map[string]any{"alerts": rows}
 	if next != "" {
 		out["nextCursor"] = next
+	}
+	// Read-model freshness for the empty-queue trust line ("All clear — read
+	// model fresh as of Xm ago"). One indexed aggregate in a short pinned
+	// transaction; NULL when the tenant has no scored shipments yet (fresh
+	// tenant before the first sweep), which the UI renders as "first sweep
+	// pending", not as zero.
+	var readModelAt *string
+	_ = db.WithTenant(r.Context(), poolOf(s), user.TenantID, func(tx pgx.Tx) error {
+		var ts *time.Time
+		if err := tx.QueryRow(r.Context(),
+			`SELECT max(updated_at) FROM shipment_current`).Scan(&ts); err != nil {
+			return err
+		}
+		if ts != nil {
+			s := ts.UTC().Format(time.RFC3339)
+			readModelAt = &s
+		}
+		return nil
+	})
+	if readModelAt != nil {
+		out["readModelAt"] = *readModelAt
 	}
 	writeJSON(w, http.StatusOK, out)
 }

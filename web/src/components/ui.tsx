@@ -99,10 +99,23 @@ export function StatTile({
   );
 }
 
-export function Empty({ message }: { message: string }) {
+export function Empty({
+  message,
+  detail,
+  actions,
+}: {
+  message: string;
+  detail?: React.ReactNode;
+  actions?: React.ReactNode;
+}) {
   return (
-    <div className="rounded-2xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-600" role="status">
-      {message}
+    <div
+      className="rounded-2xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-600"
+      role="status"
+    >
+      <p className="font-semibold text-navy-950">{message}</p>
+      {detail ? <p className="mx-auto mt-1 max-w-md text-xs">{detail}</p> : null}
+      {actions ? <div className="mt-4 flex flex-wrap justify-center gap-2">{actions}</div> : null}
     </div>
   );
 }

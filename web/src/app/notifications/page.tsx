@@ -20,19 +20,56 @@ function NotificationsBody() {
     queryKey: ['notifications'],
     queryFn: async () => (await api.get<NotificationItem[]>('/api/v1/notifications')).data,
   });
-  const { data: providers } = useQuery({
+  const { data: status } = useQuery({
     queryKey: ['notify-status'],
-    queryFn: async () => (await api.get<{ providers: Record<string, boolean> }>('/api/v1/notify/status')).data,
+    queryFn: async () =>
+      (
+        await api.get<{
+          providers: Record<string, boolean>;
+          interruptHourlyCap: number;
+          interruptsUsed: number;
+          digestPending: number;
+        }>('/api/v1/notify/status')
+      ).data,
   });
-  const live = providers ? Object.entries(providers.providers ?? {}).filter(([, v]) => v).map(([k]) => k) : [];
+  const { data: prefs } = useQuery({
+    queryKey: ['notify-prefs'],
+    queryFn: async () => (await authApi.getNotifyPrefs()).data,
+  });
+  const live = status ? Object.entries(status.providers ?? {}).filter(([, v]) => v).map(([k]) => k) : [];
   return (
-    <div className="p-4 md:p-8">
-      <header className="mb-6">
+    <div className="space-y-6 p-4 md:p-8">
+      <header>
         <h1 className="text-2xl font-extrabold text-navy-950">Notifications</h1>
-        <p className="text-sm text-slate-500">
+        <p className="text-sm text-slate-600">
           Every customer message sent{live.length > 0 ? ` · live providers: ${live.join(', ')}` : ''}
         </p>
       </header>
+      {/* Morning-confidence strip: budget position + digest queue + quiet
+          hours in one glance. Habit loop: check here, then start the day. */}
+      {status || prefs ? (
+        <Card title="Digest & budget">
+          <p className="text-sm text-slate-600" role="status" aria-live="polite">
+            Interrupt budget:{' '}
+            <span className="font-bold text-navy-950">
+              {status?.interruptsUsed ?? 0}/{status?.interruptHourlyCap ?? 5} used
+            </span>
+            {' · '}
+            {status && status.digestPending > 0 ? (
+              <span className="font-semibold">{status.digestPending} waiting in the next digest</span>
+            ) : (
+              <span>digest clear — nothing held back</span>
+            )}
+            {prefs ? (
+              <> · quiet hours {prefs.quietHoursStart}:00–{prefs.quietHoursEnd}:00 ({prefs.timezone})</>
+            ) : null}
+          </p>
+          <p className="mt-1 text-xs text-slate-500">
+            Non-interrupting updates queue into the {prefs?.digestHour ?? 8}:00 digest — suppressed never means dropped.
+            Criticals also push to Slack/Teams when a webhook is configured; switches live under Settings → Metered channels.
+          </p>
+        </Card>
+      ) : null}
       <ChannelsCard />
       {isLoading ? (
         <Card title="Loading…">
@@ -54,7 +91,18 @@ function NotificationsBody() {
           </button>
         </Card>
       ) : (data ?? []).length === 0 ? (
-        <Empty message="No notifications yet — they appear here when carrier events fire." />
+        <Empty
+          message="No notifications yet."
+          detail="They appear here when carrier events fire. Anything the interrupt budget holds back waits in the digest above — never dropped."
+          actions={
+            <Link
+              href="/shipments"
+              className="rounded-xl bg-navy-950 px-4 py-2 text-sm font-semibold text-white"
+            >
+              View shipments
+            </Link>
+          }
+        />
       ) : (
         <Card>
           <ul className="divide-y divide-slate-100">

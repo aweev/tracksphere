@@ -14,6 +14,7 @@ import {
   type AlertRootCause,
   type TeamMember,
 } from '@/lib/api';
+import { relativeTime } from '@/lib/format';
 
 type SeverityFilter = 'all' | Alert['severity'];
 
@@ -335,7 +336,13 @@ function ExceptionsBody() {
       ) : filtered.length === 0 ? (
         // A healthy control tower should be able to look quiet. Restraint is a
         // feature: an always-anxious dashboard trains a team to ignore it.
-        <Empty message="All clear — no open exceptions." />
+        // But "quiet" must prove it is watched, not broken: the trust line
+        // names the read-model freshness (real max(updated_at), never a
+        // static string), and the empty state always offers a next action.
+        <AllClearEmpty
+          readModelAt={pages?.pages[0]?.readModelAt}
+          stats={stats}
+        />
       ) : (
         <>
           <ul className="space-y-3">
@@ -489,6 +496,71 @@ function ExceptionsBody() {
   );
 }
 
+function AllClearEmpty({
+  readModelAt,
+  stats,
+}: {
+  readModelAt?: string;
+  stats: { total: number };
+}) {
+  const freshness = readModelAt ? (
+    <>
+      Read model fresh as of {relativeTime(readModelAt)} · {stats.total}{' '}
+      shipment{stats.total === 1 ? '' : 's'} scored.
+    </>
+  ) : (
+    <>First sweep pending — scores land on the next pass.</>
+  );
+  return (
+    <Empty
+      message="All clear — no open exceptions."
+      detail={freshness}
+      actions={
+        <>
+          <Link
+            href="/shipments"
+            className="rounded-xl bg-navy-950 px-4 py-2 text-sm font-semibold text-white"
+          >
+            View shipments
+          </Link>
+          <Link
+            href="/"
+            className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-navy-950 hover:bg-slate-50"
+          >
+            Open setup guide →
+          </Link>
+        </>
+      }
+    />
+  );
+}
+
+/**
+ * Customer-ready message templates per root cause. Choice overload kills
+ * triage: the operator picks a cause, the words are already written in a
+ * calm human voice, and they can edit before sending. Never auto-send.
+ */
+const CAUSE_TEMPLATES: Record<AlertRootCause, string> = {
+  documentation: 'A document is missing for your shipment {tracking} ({title}). We have requested it and will confirm clearance as soon as it lands.',
+  customs_duty: 'Your shipment {tracking} is held pending a duty payment ({title}). We are clearing it now and will confirm release.',
+  customs_processing: 'Your shipment {tracking} is in customs processing ({title}). This usually clears within a day — we are tracking it and will confirm.',
+  carrier_delay: 'The carrier reports a delay on your shipment {tracking} ({title}). We are pressing for a revised arrival and will update you.',
+  missed_connection: 'Your shipment {tracking} missed its connection ({title}). We are rebooking now and will confirm the new plan.',
+  blank_sailing: 'The scheduled sailing for your shipment {tracking} was cancelled by the carrier ({title}). Rebooking is underway — new plan to follow.',
+  port_congestion: 'The terminal is congested around your shipment {tracking} ({title}). Arrival may slip slightly — we will confirm the revised window.',
+  capacity: 'Capacity is tight on your lane — your shipment {tracking} ({title}) may move to the next departure. We will confirm either way.',
+  weather: 'Weather is holding your shipment {tracking} ({title}). Safety first — we will confirm movement as soon as the lane reopens.',
+  carrier_error: 'The carrier flagged an error on your shipment {tracking} ({title}). We are on it and will confirm the correction.',
+  shipper_delay: 'The shipper delayed handover for {tracking} ({title}). We will confirm once the goods are moving.',
+  other: 'An update on your shipment {tracking}: {title}. We are handling it and will confirm the next step shortly.',
+};
+
+function fillTemplate(cause: AlertRootCause, tracking: string, title: string): string {
+  return (CAUSE_TEMPLATES[cause] ?? CAUSE_TEMPLATES.other)
+    .replaceAll('{tracking}', tracking || 'your shipment')
+    .replaceAll('{title}', title);
+}
+
 /**
  * The triage panel. An exception card has to answer seven questions or it is
  * not actionable: what happened, which shipment, why it matters, the likely
@@ -516,9 +588,11 @@ function TriagePanel({
   const [cause, setCause] = useState<AlertRootCause>(alert.rootCause ?? 'other');
   const [note, setNote] = useState(alert.note ?? '');
   const [carrierTo, setCarrierTo] = useState('');
+  const [customerMsg, setCustomerMsg] = useState('');
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
-  const customerUpdate = `Update on ${alert.trackingNumber ?? 'your shipment'}: ${alert.title} — ${alert.message}`;
+  const customerUpdate = customerMsg.trim() ||
+    `Update on ${alert.trackingNumber ?? 'your shipment'}: ${alert.title} — ${alert.message}`;
 
   const sendCustomerUpdate = async (tracking: string, title: string, message: string) => {
     try {
@@ -567,6 +641,19 @@ function TriagePanel({
           {toast.message}
         </div>
       )}
+      {/* Cost of inaction, framed honestly (loss aversion without dark
+          patterns): what is at stake and how long the clock has run. */}
+      <p className="rounded-lg bg-white px-3 py-2 text-xs text-slate-600 ring-1 ring-slate-200">
+        {alert.valueAtRisk ? (
+          <><span className="font-bold text-navy-950">${Math.round(alert.valueAtRisk).toLocaleString()}</span> at risk · </>
+        ) : (
+          <>No declared value on file · </>
+        )}
+        {alert.staleHours && alert.staleHours > 1 ? (
+          <>no carrier scan for {Math.round(alert.staleHours)}h · </>
+        ) : null}
+        {alert.dueAt ? <>SLA {new Date(alert.dueAt) < new Date() ? 'breached' : 'due'} {relativeTime(alert.dueAt)}</> : <>no SLA deadline set</>}
+      </p>
       <div className="grid gap-3 sm:grid-cols-2">
         <label className="block text-xs font-semibold text-slate-700">
           Owner
@@ -607,18 +694,42 @@ function TriagePanel({
 
       <label className="block text-xs font-semibold text-slate-700">
         Root cause
-        <select
-          value={cause}
-          disabled={busy}
-          onChange={(e) => setCause(e.target.value as AlertRootCause)}
+        <div className="mt-1 flex gap-2">
+          <select
+            value={cause}
+            disabled={busy}
+            onChange={(e) => setCause(e.target.value as AlertRootCause)}
+            className="w-full rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm font-normal"
+          >
+            {ROOT_CAUSES.map((r) => (
+              <option key={r.value} value={r.value}>
+                {r.label}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() =>
+              setCustomerMsg(fillTemplate(cause, alert.trackingNumber ?? '', alert.title))
+            }
+            title="Fill the customer message from the selected cause — edit before sending, never auto-sent."
+            className="shrink-0 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-navy-950 hover:bg-slate-50"
+          >
+            Use template
+          </button>
+        </div>
+      </label>
+
+      <label className="block text-xs font-semibold text-slate-700">
+        Customer message <span className="font-normal text-slate-500">(editable — nothing sends until you press it)</span>
+        <textarea
+          value={customerMsg}
+          onChange={(e) => setCustomerMsg(e.target.value)}
+          placeholder="Pick a cause, press “Use template”, then edit…"
+          rows={2}
           className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm font-normal"
-        >
-          {ROOT_CAUSES.map((r) => (
-            <option key={r.value} value={r.value}>
-              {r.label}
-            </option>
-          ))}
-        </select>
+        />
       </label>
 
       <label className="block text-xs font-semibold text-slate-700">
@@ -643,12 +754,34 @@ function TriagePanel({
         />
       </label>
 
+      {/* Three primary actions max (Hick's Law at a moment of stress):
+          tell the customer, press the carrier, or close with a cause.
+          Copy is secondary. One-click sends bypass the interrupt budget BY
+          DESIGN — a human pressed the button, and automation never may. */}
       <div className="flex flex-wrap items-center gap-2 pt-1">
+        {!alert.customerNotified ? (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => sendCustomerUpdate(alert.trackingNumber ?? '', alert.title, customerUpdate)}
+            className="rounded-xl bg-navy-950 px-4 py-2 text-xs font-semibold text-white disabled:opacity-50"
+          >
+            Send customer update
+          </button>
+        ) : null}
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => emailCarrier(alert.trackingNumber ?? '', alert.title, alert.message, note.trim(), carrierTo)}
+          className="rounded-xl bg-accent-700 px-4 py-2 text-xs font-semibold text-white hover:bg-accent-700-hover disabled:opacity-50"
+        >
+          Email carrier agent
+        </button>
         <button
           type="button"
           disabled={busy}
           onClick={() => onResolve(cause, note.trim())}
-          className="rounded-xl bg-navy-950 px-4 py-2 text-xs font-semibold text-white disabled:opacity-50"
+          className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-navy-950"
         >
           Resolve with cause
         </button>
@@ -662,34 +795,18 @@ function TriagePanel({
               /* clipboard unavailable */
             }
           }}
-          className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-navy-950"
+          aria-live="polite"
+          className="rounded-xl px-3 py-2 text-xs font-semibold text-slate-600 hover:underline"
         >
-          Copy customer update
+          Copy update
         </button>
-        {!alert.customerNotified ? (
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => sendCustomerUpdate(alert.trackingNumber ?? '', alert.title, alert.message)}
-            className="rounded-xl bg-emerald-600 px-4 py-2 text-xs font-semibold text-white disabled:opacity-50"
-          >
-            Send customer update
-          </button>
-        ) : null}
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => emailCarrier(alert.trackingNumber ?? '', alert.title, alert.message, note.trim(), carrierTo)}
-          className="rounded-xl bg-amber-600 px-4 py-2 text-xs font-semibold text-white disabled:opacity-50"
-        >
-          Email carrier
-        </button>
-        {!alert.customerNotified ? (
-          <span className="text-xs text-slate-500">
-            Customer has not been told — send the update before closing.
-          </span>
-        ) : null}
       </div>
+      <p className="text-[11px] text-slate-500">
+        One-click actions send immediately and bypass the interrupt budget by design — a human pressed them.
+        {!alert.customerNotified ? (
+          <span className="font-semibold text-slate-600"> Customer has not been told — send the update before closing.</span>
+        ) : null}
+      </p>
       {failed ? (
         <p role="alert" className="text-xs text-red-600">
           Action failed — try again.
