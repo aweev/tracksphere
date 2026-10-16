@@ -70,11 +70,11 @@ func (s *Server) handleListLegs(w http.ResponseWriter, r *http.Request) {
 }
 
 type legInput struct {
-	Carrier     string  `json:"carrier"`
-	Mode        string  `json:"mode"`
-	Origin      string  `json:"origin"`
-	Destination string  `json:"destination"`
-	Status      string  `json:"status"`
+	Carrier     string     `json:"carrier"`
+	Mode        string     `json:"mode"`
+	Origin      string     `json:"origin"`
+	Destination string     `json:"destination"`
+	Status      string     `json:"status"`
 	ETA         *time.Time `json:"eta"`
 }
 

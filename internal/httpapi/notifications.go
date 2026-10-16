@@ -15,13 +15,13 @@ import (
 func (s *Server) handleListNotifications(w http.ResponseWriter, r *http.Request) {
 	user := currentUser(r)
 	type view struct {
-		ID         int64     `json:"id"`
+		ID         int64      `json:"id"`
 		ShipmentID *uuid.UUID `json:"shipmentId,omitempty"`
-		Channel    string    `json:"channel"`
-		Recipient  string    `json:"recipient"`
-		Subject    string    `json:"subject"`
-		Status     string    `json:"status"`
-		CreatedAt  time.Time `json:"createdAt"`
+		Channel    string     `json:"channel"`
+		Recipient  string     `json:"recipient"`
+		Subject    string     `json:"subject"`
+		Status     string     `json:"status"`
+		CreatedAt  time.Time  `json:"createdAt"`
 	}
 	out := []view{}
 	err := db.WithTenant(r.Context(), s.pool, user.TenantID, func(tx pgx.Tx) error {

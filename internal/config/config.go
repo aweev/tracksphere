@@ -15,17 +15,17 @@ import (
 )
 
 type Config struct {
-	Env     string // local | development | production
-	Region  string // deployment region, e.g. us | eu (data-residency label)
+	Env      string // local | development | production
+	Region   string // deployment region, e.g. us | eu (data-residency label)
 	HTTPAddr string
 	// PublicURL is the externally visible origin (e.g. https://track.acme.com).
 	// Used for links we send to customers — confirmation emails, unsubscribe
 	// links. The API sits behind Cloudflare and cannot infer its own origin.
 	PublicURL string
 
-	DatabaseURL       string
-	MigrationsURL     string
-	AutoMigrate       bool
+	DatabaseURL   string
+	MigrationsURL string
+	AutoMigrate   bool
 
 	CORSOrigins []string
 	// TrustedProxies are CIDRs or bare IPs whose forwarding headers
@@ -42,17 +42,17 @@ type Config struct {
 	// the same public hostname as everything else.
 	ExposeMetrics bool
 
-	SecretKeys   [][]byte // Multi-key rotation: first is primary for encryption, all tried for decryption
-	SecretKey    []byte   // Legacy single key (deprecated, use SecretKeys)
-	SessionTTL   time.Duration
-	WebhookSecret  []byte
+	SecretKeys    [][]byte // Multi-key rotation: first is primary for encryption, all tried for decryption
+	SecretKey     []byte   // Legacy single key (deprecated, use SecretKeys)
+	SessionTTL    time.Duration
+	WebhookSecret []byte
 	// Per-carrier HMAC secrets: TRACKSPHERE_CARRIER_WEBHOOK_SECRETS="maersk:s1,dhl:s2".
 	// WebhookSecret remains the fallback/default. Rotate per carrier without
 	// breaking the others.
 	CarrierSecrets map[string]string
 
-	WorkerConcurrency   int
-	WorkerPollInterval  time.Duration
+	WorkerConcurrency  int
+	WorkerPollInterval time.Duration
 	// APIWorkers is the number of API worker processes (for pool sizing)
 	APIWorkers int
 
@@ -76,14 +76,14 @@ func Load() (*Config, error) {
 	_ = godotenv.Load() // missing file is fine — production uses real env vars
 
 	cfg := &Config{
-		Env:            get("TRACKSPHERE_ENV", "local"),
-		Region:         get("TRACKSPHERE_REGION", "us"),
-		HTTPAddr:       get("TRACKSPHERE_HTTP_ADDR", ":8080"),
-		PublicURL:      strings.TrimRight(get("TRACKSPHERE_PUBLIC_URL", ""), "/"),
-		DatabaseURL:    get("TRACKSPHERE_DATABASE_URL", ""),
-		MigrationsURL:  get("TRACKSPHERE_MIGRATIONS_URL", ""),
-		CORSOrigins:    splitCSV(get("TRACKSPHERE_CORS_ORIGINS", "http://localhost:5173")),
-		LogLevel:       get("TRACKSPHERE_LOG_LEVEL", "info"),
+		Env:           get("TRACKSPHERE_ENV", "local"),
+		Region:        get("TRACKSPHERE_REGION", "us"),
+		HTTPAddr:      get("TRACKSPHERE_HTTP_ADDR", ":8080"),
+		PublicURL:     strings.TrimRight(get("TRACKSPHERE_PUBLIC_URL", ""), "/"),
+		DatabaseURL:   get("TRACKSPHERE_DATABASE_URL", ""),
+		MigrationsURL: get("TRACKSPHERE_MIGRATIONS_URL", ""),
+		CORSOrigins:   splitCSV(get("TRACKSPHERE_CORS_ORIGINS", "http://localhost:5173")),
+		LogLevel:      get("TRACKSPHERE_LOG_LEVEL", "info"),
 	}
 
 	var err error
@@ -337,13 +337,13 @@ var KnownCarriers = map[string]bool{
 func (c *Config) RecommendedDBPoolSize() int {
 	// API needs connections for HTTP handlers + SSE hub + metrics
 	apiConns := c.APIWorkers + 2 // +2 for SSE hub, metrics
-	
+
 	// Worker needs connections for pollers + reaper + archiver + LISTEN + scheduler
 	workerConns := c.WorkerConcurrency + 4 // +4 for background tasks
-	
+
 	// Total with safety factor
 	total := (apiConns + workerConns) * 2
-	
+
 	// Cap at reasonable maximum
 	if total > 100 {
 		total = 100

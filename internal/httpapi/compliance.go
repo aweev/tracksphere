@@ -44,12 +44,12 @@ func (s *Server) handleStatusz(w http.ResponseWriter, r *http.Request) {
 		status = "degraded"
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status":   status,
-		"region":   s.cfg.Region,
-		"version":  buildVersion,
+		"status":    status,
+		"region":    s.cfg.Region,
+		"version":   buildVersion,
 		"uptimeSec": int(time.Since(s.startedAt).Seconds()),
-		"queue":    map[string]any{"pending": pending, "dead": dead},
-		"backup":   map[string]any{"lastSuccess": lastBackup, "ageHours": backupAgeH},
+		"queue":     map[string]any{"pending": pending, "dead": dead},
+		"backup":    map[string]any{"lastSuccess": lastBackup, "ageHours": backupAgeH},
 	})
 }
 
@@ -62,15 +62,15 @@ func (s *Server) handleEvidence(w http.ResponseWriter, r *http.Request) {
 		"region":      s.cfg.Region,
 		"version":     buildVersion,
 		"controls": map[string]any{
-			"encryptionAtRest":  "AES-256-GCM sealed TOTP secrets; SHA-256 hashed sessions/API keys",
-			"passwordStorage":   "argon2id (64MiB, t=1, p=4)",
-			"tenantIsolation":   "PostgreSQL FORCE RLS, non-superuser app role, verified by rls_test.sql",
-			"auditLogging":      "auth_events + shipment_audit append-only; no PII in request logs",
-			"mfaAvailable":      true,
-			"ssoAvailable":      sso.Status()["google"] || sso.Status()["microsoft"],
-			"dataResidency":     s.cfg.Region,
-			"retentionWindows":  map[string]any{"jobsDone": "7d", "jobsDead": "90d", "inbox": "90d", "notifications": "180d", "authEvents": "365d"},
-			"gdprExportErase":   true,
+			"encryptionAtRest": "AES-256-GCM sealed TOTP secrets; SHA-256 hashed sessions/API keys",
+			"passwordStorage":  "argon2id (64MiB, t=1, p=4)",
+			"tenantIsolation":  "PostgreSQL FORCE RLS, non-superuser app role, verified by rls_test.sql",
+			"auditLogging":     "auth_events + shipment_audit append-only; no PII in request logs",
+			"mfaAvailable":     true,
+			"ssoAvailable":     sso.Status()["google"] || sso.Status()["microsoft"],
+			"dataResidency":    s.cfg.Region,
+			"retentionWindows": map[string]any{"jobsDone": "7d", "jobsDead": "90d", "inbox": "90d", "notifications": "180d", "authEvents": "365d"},
+			"gdprExportErase":  true,
 		},
 	}
 	err := db.WithTenant(r.Context(), s.pool, user.TenantID, func(tx pgx.Tx) error {

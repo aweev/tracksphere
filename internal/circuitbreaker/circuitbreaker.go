@@ -13,25 +13,25 @@ import (
 type State int
 
 const (
-	StateClosed State = iota // Normal operation, requests pass through
-	StateOpen                // Failing, requests blocked
-	StateHalfOpen            // Testing if service recovered
+	StateClosed   State = iota // Normal operation, requests pass through
+	StateOpen                  // Failing, requests blocked
+	StateHalfOpen              // Testing if service recovered
 )
 
 var (
-	ErrCircuitOpen   = errors.New("circuit breaker is open")
-	ErrTooManyCalls  = errors.New("too many calls in half-open state")
+	ErrCircuitOpen  = errors.New("circuit breaker is open")
+	ErrTooManyCalls = errors.New("too many calls in half-open state")
 )
 
 // Config holds circuit breaker configuration
 type Config struct {
-	Name              string
-	MaxRequests       uint32        // Max requests in half-open state
-	Interval          time.Duration // Time in closed state before reset counts
-	Timeout           time.Duration // Time in open state before half-open
-	ReadyToTrip       func(counts Counts) bool
-	OnStateChange     func(name string, from State, to State)
-	IsSuccessful      func(err error) bool
+	Name          string
+	MaxRequests   uint32        // Max requests in half-open state
+	Interval      time.Duration // Time in closed state before reset counts
+	Timeout       time.Duration // Time in open state before half-open
+	ReadyToTrip   func(counts Counts) bool
+	OnStateChange func(name string, from State, to State)
+	IsSuccessful  func(err error) bool
 }
 
 // Counts holds the statistics for the circuit breaker
@@ -53,10 +53,10 @@ type CircuitBreaker struct {
 	onStateChange func(name string, from State, to State)
 	isSuccessful  func(err error) bool
 
-	mu       sync.Mutex
-	state    State
-	counts   Counts
-	expiry   time.Time
+	mu         sync.Mutex
+	state      State
+	counts     Counts
+	expiry     time.Time
 	generation uint64
 }
 

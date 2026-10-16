@@ -95,13 +95,13 @@ func IsAnomaly(elapsed time.Duration, lane *LaneStats) bool {
 
 // Digest is the weekly ops summary payload (endpoint + owner notification).
 type Digest struct {
-	WeekStart      time.Time      `json:"weekStart"`
-	Delivered      int64          `json:"delivered"`
-	OnTimePct      *float64       `json:"onTimePct,omitempty"`
-	Exceptions     int64          `json:"exceptions"`
-	OpenAlerts     int64          `json:"openAlerts"`
-	TopCarriers    []CarrierLine  `json:"topCarriers"`
-	StaleShipments int64          `json:"staleShipments"`
+	WeekStart      time.Time     `json:"weekStart"`
+	Delivered      int64         `json:"delivered"`
+	OnTimePct      *float64      `json:"onTimePct,omitempty"`
+	Exceptions     int64         `json:"exceptions"`
+	OpenAlerts     int64         `json:"openAlerts"`
+	TopCarriers    []CarrierLine `json:"topCarriers"`
+	StaleShipments int64         `json:"staleShipments"`
 }
 
 type CarrierLine struct {
@@ -111,13 +111,13 @@ type CarrierLine struct {
 
 // DailySummary is the daily ops summary payload (email + Slack/Teams webhook).
 type DailySummary struct {
-	Date               time.Time  `json:"date"`
-	ShipmentsCreated   int64      `json:"shipmentsCreated"`
-	ShipmentsDelivered int64      `json:"shipmentsDelivered"`
-	ActiveShipments    int64      `json:"activeShipments"`
-	ExceptionsRaised   int64      `json:"exceptionsRaised"`
-	CriticalAlertsOpen int64      `json:"criticalAlertsOpen"`
-	AlertsResolved     int64      `json:"alertsResolved"`
-	AvgResolutionHours *float64   `json:"avgResolutionHours,omitempty"`
-	TopCarrier         string     `json:"topCarrier,omitempty"`
+	Date               time.Time `json:"date"`
+	ShipmentsCreated   int64     `json:"shipmentsCreated"`
+	ShipmentsDelivered int64     `json:"shipmentsDelivered"`
+	ActiveShipments    int64     `json:"activeShipments"`
+	ExceptionsRaised   int64     `json:"exceptionsRaised"`
+	CriticalAlertsOpen int64     `json:"criticalAlertsOpen"`
+	AlertsResolved     int64     `json:"alertsResolved"`
+	AvgResolutionHours *float64  `json:"avgResolutionHours,omitempty"`
+	TopCarrier         string    `json:"topCarrier,omitempty"`
 }

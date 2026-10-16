@@ -170,7 +170,7 @@ func TestAlertQueuePagesWithoutGaps(t *testing.T) {
 func TestAlertCursorRejectsGarbage(t *testing.T) {
 	for _, bad := range []string{
 		"not-base64!!!",
-		"e30=",                                                 // {} — missing fields
+		"e30=", // {} — missing fields
 		"eyJyIjotMSwidCI6IjIwMjYtMDEtMDFUMDA6MDA6MDBaIiwiaSI6IjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDAwMCJ9", // rank -1
 	} {
 		if _, err := decodeAlertCursor(bad); err == nil {

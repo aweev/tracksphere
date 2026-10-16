@@ -81,13 +81,13 @@ func Open(ctx context.Context, dsn string, workerConcurrency, apiWorkers int) (*
 func CalculateRecommendedPoolSize(workerConcurrency int, apiWorkers int) int {
 	// API needs connections for HTTP handlers + SSE hub + metrics
 	apiConns := apiWorkers + 2 // +2 for SSE hub, metrics
-	
+
 	// Worker needs connections for pollers + reaper + archiver + LISTEN + scheduler
 	workerConns := workerConcurrency + 4 // +4 for background tasks
-	
+
 	// Total with safety factor
 	total := (apiConns + workerConns) * 2
-	
+
 	// Cap at reasonable maximum
 	if total > 100 {
 		total = 100
@@ -172,6 +172,7 @@ func SetTenant(ctx context.Context, q querier, tenantID uuid.UUID) error {
 //   - tenant creation (register/seed): the new tenant's id cannot equal
 //     current_tenant() before it exists, so the tenants policy admits the
 //     INSERT only under this flag.
+//
 // Callers MUST pin the resolved/created tenant with SetTenant before any
 // business-table write — WITH CHECK policies reject un-pinned writes.
 func SetSystem(ctx context.Context, q querier) error {
@@ -284,13 +285,13 @@ func MarkShipmentDirty(ctx context.Context, tx pgx.Tx, shipmentID uuid.UUID) err
 func calculateRecommendedPoolSize(workerConcurrency, apiWorkers int) int {
 	// API needs connections for HTTP handlers + SSE hub + metrics
 	apiConns := apiWorkers + 2 // +2 for SSE hub, metrics
-	
+
 	// Worker needs connections for pollers + reaper + archiver + LISTEN + scheduler
 	workerConns := workerConcurrency + 4 // +4 for background tasks
-	
+
 	// Total with safety factor
 	total := (apiConns + workerConns) * 2
-	
+
 	// Cap at reasonable maximum
 	if total > 100 {
 		total = 100

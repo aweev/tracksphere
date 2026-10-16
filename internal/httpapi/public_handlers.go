@@ -48,11 +48,11 @@ func (s *Server) handlePublicTrack(w http.ResponseWriter, r *http.Request) {
 		// same row. Without this the portal could not distinguish a
 		// carrier-confirmed date from our own heuristic, which is exactly the
 		// ambiguity that makes customers stop trusting a tracker.
-		"etaSource":      ship.ETASource,
-		"shippedAt":      ship.ShippedAt,
-		"deliveredAt":    ship.DeliveredAt,
-		"lastUpdate":     ship.UpdatedAt,
-		"events":         events,
-		"brand":          s.brandFor(r.Context(), ship.TenantID.String()),
+		"etaSource":   ship.ETASource,
+		"shippedAt":   ship.ShippedAt,
+		"deliveredAt": ship.DeliveredAt,
+		"lastUpdate":  ship.UpdatedAt,
+		"events":      events,
+		"brand":       s.brandFor(r.Context(), ship.TenantID.String()),
 	})
 }

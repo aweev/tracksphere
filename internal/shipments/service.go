@@ -52,11 +52,11 @@ var ErrAmbiguousTracking = fmt.Errorf("ambiguous tracking number for carrier")
 var ErrUnknownTracking = fmt.Errorf("unknown tracking number")
 
 // IngestEvent applies one carrier event atomically:
-//   1. resolve shipment by tracking number (any tenant — carriers don't know ours)
-//   2. insert timeline event (idempotent on dedup_key)
-//   3. advance shipment status / ETA
-//   4. enqueue evaluation + notification jobs (same tx = outbox)
-//   5. pg_notify('tracksphere', ...) so SSE clients update instantly
+//  1. resolve shipment by tracking number (any tenant — carriers don't know ours)
+//  2. insert timeline event (idempotent on dedup_key)
+//  3. advance shipment status / ETA
+//  4. enqueue evaluation + notification jobs (same tx = outbox)
+//  5. pg_notify('tracksphere', ...) so SSE clients update instantly
 //
 // source is 'webhook' for carrier deliveries, 'manual' for operator-entered
 // scans. The tenant context is pinned midway so FORCE RLS applies to all writes.
@@ -314,15 +314,15 @@ func (s *Service) NotifyCustomer(ctx context.Context, tenantID, shipmentID uuid.
 	if !exists {
 		return ErrNotFound
 	}
-	
+
 	// Queue a customer notification job
 	jobPayload := map[string]any{
-		"shipmentId":   shipmentID.String(),
-		"tenantId":     tenantID.String(),
-		"title":        title,
-		"message":      message,
-		"customerMsg":  customerMsg,
-		"isCustom":     true,
+		"shipmentId":  shipmentID.String(),
+		"tenantId":    tenantID.String(),
+		"title":       title,
+		"message":     message,
+		"customerMsg": customerMsg,
+		"isCustom":    true,
 	}
 	return s.queue.EnqueueTenant(ctx, tenantID, "shipment.notify_customer", jobPayload, time.Time{})
 }
@@ -345,14 +345,14 @@ func (s *Service) EmailCarrier(ctx context.Context, tenantID, shipmentID uuid.UU
 	if !exists {
 		return ErrNotFound
 	}
-	
+
 	jobPayload := map[string]any{
-		"shipmentId":   shipmentID.String(),
-		"tenantId":     tenantID.String(),
-		"title":        title,
-		"message":      message,
-		"note":         note,
-		"to":           to,
+		"shipmentId": shipmentID.String(),
+		"tenantId":   tenantID.String(),
+		"title":      title,
+		"message":    message,
+		"note":       note,
+		"to":         to,
 	}
 	return s.queue.EnqueueTenant(ctx, tenantID, "shipment.email_carrier", jobPayload, time.Time{})
 }

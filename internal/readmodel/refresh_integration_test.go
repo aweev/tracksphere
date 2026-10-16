@@ -131,6 +131,7 @@ func TestRefreshBatchIsFlagDriven(t *testing.T) {
 		t.Fatalf("third batch refreshed %d, want 1 (re-dirtied row)", third)
 	}
 }
+
 // TestRefreshDetectsSilentShipment proves the "nothing is happening" case:
 // a shipment created ten days ago with zero carrier events must accrue
 // staleness and dwell from its creation date. Before the baseline fallback,

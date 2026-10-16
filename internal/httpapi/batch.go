@@ -3,9 +3,9 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"github.com/google/uuid"
 	"net/http"
 	"strings"
-	"github.com/google/uuid"
 
 	"github.com/jackc/pgx/v5"
 
@@ -27,9 +27,9 @@ type bulkItem struct {
 }
 
 type bulkResult struct {
-	Index          int              `json:"index"`
-	Shipment       *model.Shipment  `json:"shipment,omitempty"`
-	Error          *model.APIError  `json:"error,omitempty"`
+	Index    int             `json:"index"`
+	Shipment *model.Shipment `json:"shipment,omitempty"`
+	Error    *model.APIError `json:"error,omitempty"`
 }
 
 // handleBatchCreate POST /api/v1/shipments:batch

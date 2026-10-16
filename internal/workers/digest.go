@@ -85,14 +85,14 @@ func DailySummary(ctx context.Context, pool *pgxpool.Pool, tenantID uuid.UUID) (
 	d := &intel.DailySummary{Date: time.Now().UTC().Truncate(24 * time.Hour)}
 	err := db.WithTenant(ctx, pool, tenantID, func(tx pgx.Tx) error {
 		dayAgo := time.Now().UTC().Add(-24 * time.Hour)
-		
+
 		// Shipments created today
 		if err := tx.QueryRow(ctx, `
 			SELECT count(*) FROM shipments WHERE created_at >= $1`, dayAgo).
 			Scan(&d.ShipmentsCreated); err != nil {
 			return err
 		}
-		
+
 		// Shipments delivered today
 		if err := tx.QueryRow(ctx, `
 			SELECT count(*) FROM shipments 
@@ -100,7 +100,7 @@ func DailySummary(ctx context.Context, pool *pgxpool.Pool, tenantID uuid.UUID) (
 			Scan(&d.ShipmentsDelivered); err != nil {
 			return err
 		}
-		
+
 		// Active shipments (not delivered/cancelled)
 		if err := tx.QueryRow(ctx, `
 			SELECT count(*) FROM shipments 
@@ -108,7 +108,7 @@ func DailySummary(ctx context.Context, pool *pgxpool.Pool, tenantID uuid.UUID) (
 			Scan(&d.ActiveShipments); err != nil {
 			return err
 		}
-		
+
 		// Exceptions raised today
 		if err := tx.QueryRow(ctx, `
 			SELECT count(*) FROM alerts 
@@ -116,7 +116,7 @@ func DailySummary(ctx context.Context, pool *pgxpool.Pool, tenantID uuid.UUID) (
 			Scan(&d.ExceptionsRaised); err != nil {
 			return err
 		}
-		
+
 		// Critical alerts open
 		if err := tx.QueryRow(ctx, `
 			SELECT count(*) FROM alerts 
@@ -124,7 +124,7 @@ func DailySummary(ctx context.Context, pool *pgxpool.Pool, tenantID uuid.UUID) (
 			Scan(&d.CriticalAlertsOpen); err != nil {
 			return err
 		}
-		
+
 		// Alerts resolved today
 		if err := tx.QueryRow(ctx, `
 			SELECT count(*) FROM alerts 
@@ -132,7 +132,7 @@ func DailySummary(ctx context.Context, pool *pgxpool.Pool, tenantID uuid.UUID) (
 			Scan(&d.AlertsResolved); err != nil {
 			return err
 		}
-		
+
 		// Average resolution time (hours)
 		var avgHours *float64
 		if err := tx.QueryRow(ctx, `
@@ -142,7 +142,7 @@ func DailySummary(ctx context.Context, pool *pgxpool.Pool, tenantID uuid.UUID) (
 			return err
 		}
 		d.AvgResolutionHours = avgHours
-		
+
 		// Top carrier by volume
 		if err := tx.QueryRow(ctx, `
 			SELECT carrier FROM shipments
@@ -151,7 +151,7 @@ func DailySummary(ctx context.Context, pool *pgxpool.Pool, tenantID uuid.UUID) (
 			Scan(&d.TopCarrier); err != nil && err != pgx.ErrNoRows {
 			return err
 		}
-		
+
 		return nil
 	})
 	if err != nil {
@@ -309,10 +309,10 @@ func HandleDigest(pool *pgxpool.Pool, log *slog.Logger) func(context.Context, []
 func HandleDailyReport(pool *pgxpool.Pool, log *slog.Logger) func(context.Context, []byte) error {
 	slackWebhook := os.Getenv("TRACKSPHERE_SLACK_WEBHOOK_URL")
 	teamsWebhook := os.Getenv("TRACKSPHERE_TEAMS_WEBHOOK_URL")
-	
+
 	client := httpclient.NewClient(httpclient.NotificationProviderClient)
-	
-		return func(ctx context.Context, body []byte) error {
+
+	return func(ctx context.Context, body []byte) error {
 		var p struct {
 			TenantID uuid.UUID `json:"tenantId"`
 		}
@@ -432,8 +432,8 @@ func sendSlackWebhook(ctx context.Context, webhookURL string, client *httpclient
 			{
 				"type": "header",
 				"text": map[string]any{
-					"type": "plain_text",
-					"text": "📊 TrackSphere Daily Summary",
+					"type":  "plain_text",
+					"text":  "📊 TrackSphere Daily Summary",
 					"emoji": true,
 				},
 			},
@@ -458,7 +458,7 @@ func sendSlackWebhook(ctx context.Context, webhookURL string, client *httpclient
 			},
 		},
 	}
-	
+
 	if d.CriticalAlertsOpen > 0 {
 		payload["blocks"] = append(payload["blocks"].([]map[string]any), map[string]any{
 			"type": "section",
@@ -468,7 +468,7 @@ func sendSlackWebhook(ctx context.Context, webhookURL string, client *httpclient
 			},
 		})
 	}
-	
+
 	body, _ := json.Marshal(payload)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, webhookURL, bytes.NewReader(body))
 	if err != nil {
@@ -497,7 +497,7 @@ func sendTeamsWebhook(ctx context.Context, webhookURL string, client *httpclient
 		"summary":    subject,
 		"sections": []map[string]any{
 			{
-				"activityTitle": "📊 TrackSphere Daily Summary",
+				"activityTitle":    "📊 TrackSphere Daily Summary",
 				"activitySubtitle": d.Date.Format("2006-01-02"),
 				"facts": []map[string]any{
 					{"name": "Active Shipments", "value": fmt.Sprintf("%d", d.ActiveShipments)},
@@ -517,15 +517,15 @@ func sendTeamsWebhook(ctx context.Context, webhookURL string, client *httpclient
 			},
 		},
 	}
-	
+
 	if d.CriticalAlertsOpen > 0 {
 		payload["themeColor"] = "FF0000"
 		payload["sections"] = append(payload["sections"].([]map[string]any), map[string]any{
 			"activityTitle": ":red_circle: Critical Alerts Require Attention",
-			"text": fmt.Sprintf("%d critical alerts are currently open", d.CriticalAlertsOpen),
+			"text":          fmt.Sprintf("%d critical alerts are currently open", d.CriticalAlertsOpen),
 		})
 	}
-	
+
 	body, _ := json.Marshal(payload)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, webhookURL, bytes.NewReader(body))
 	if err != nil {

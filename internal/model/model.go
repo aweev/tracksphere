@@ -11,13 +11,13 @@ import (
 
 // Shipment statuses (mirror the CHECK constraint in 000001_init.sql).
 const (
-	StatusBooked        = "booked"
-	StatusInTransit     = "in_transit"
-	StatusAtCustoms     = "at_customs"
+	StatusBooked         = "booked"
+	StatusInTransit      = "in_transit"
+	StatusAtCustoms      = "at_customs"
 	StatusOutForDelivery = "out_for_delivery"
-	StatusDelivered     = "delivered"
-	StatusException     = "exception"
-	StatusCancelled     = "cancelled"
+	StatusDelivered      = "delivered"
+	StatusException      = "exception"
+	StatusCancelled      = "cancelled"
 )
 
 // ValidStatus reports whether s is a known shipment status.
@@ -106,17 +106,17 @@ type Shipment struct {
 
 // ShipmentEvent is one point on the timeline.
 type ShipmentEvent struct {
-	ID          uuid.UUID  `json:"id"`
-	ShipmentID  uuid.UUID  `json:"shipmentId"`
-	Carrier     string     `json:"carrier"`
-	Code        string     `json:"code"`
-	Description string     `json:"description"`
-	Location    string     `json:"location"`
-	Lat         *float64   `json:"lat,omitempty"`
-	Lng         *float64   `json:"lng,omitempty"`
-	OccurredAt  time.Time  `json:"occurredAt"`
-	ReceivedAt  time.Time  `json:"receivedAt"`
-	Source      string     `json:"source"`
+	ID          uuid.UUID `json:"id"`
+	ShipmentID  uuid.UUID `json:"shipmentId"`
+	Carrier     string    `json:"carrier"`
+	Code        string    `json:"code"`
+	Description string    `json:"description"`
+	Location    string    `json:"location"`
+	Lat         *float64  `json:"lat,omitempty"`
+	Lng         *float64  `json:"lng,omitempty"`
+	OccurredAt  time.Time `json:"occurredAt"`
+	ReceivedAt  time.Time `json:"receivedAt"`
+	Source      string    `json:"source"`
 }
 
 // Alert is an exception raised by the rules engine.
@@ -133,25 +133,25 @@ type Alert struct {
 
 	// Ownership loop. An alert with no assignee belongs to nobody, so in a
 	// team nobody works it — unowned work is invisible work.
-	AssignedTo    *uuid.UUID `json:"assignedTo,omitempty"`
-	AssignedToName string    `json:"assignedToName,omitempty"`
-	AssignedAt    *time.Time `json:"assignedAt,omitempty"`
+	AssignedTo     *uuid.UUID `json:"assignedTo,omitempty"`
+	AssignedToName string     `json:"assignedToName,omitempty"`
+	AssignedAt     *time.Time `json:"assignedAt,omitempty"`
 	AcknowledgedAt *time.Time `json:"acknowledgedAt,omitempty"`
 
 	// SLA pressure. due_at is set from the tenant's per-severity target when
 	// the alert is raised; overrunning it escalates.
-	DueAt       *time.Time `json:"dueAt,omitempty"`
-	EscalatedAt *time.Time `json:"escalatedAt,omitempty"`
+	DueAt        *time.Time `json:"dueAt,omitempty"`
+	EscalatedAt  *time.Time `json:"escalatedAt,omitempty"`
 	SnoozedUntil *time.Time `json:"snoozedUntil,omitempty"`
 
 	// Closure feedback. The root cause is what makes carrier scorecards and
 	// ETA calibration possible, so closing an alert without one is recorded as
 	// "other" rather than silently discarding the signal.
-	RootCause   string  `json:"rootCause,omitempty"`
-	Note        string  `json:"note,omitempty"`
-	Resolution  string  `json:"resolution,omitempty"`
+	RootCause   string     `json:"rootCause,omitempty"`
+	Note        string     `json:"note,omitempty"`
+	Resolution  string     `json:"resolution,omitempty"`
 	ResolvedBy  *uuid.UUID `json:"resolvedBy,omitempty"`
-	ValueAtRisk *float64 `json:"valueAtRisk,omitempty"`
+	ValueAtRisk *float64   `json:"valueAtRisk,omitempty"`
 
 	// Detection window. detected_at is when the condition first became true;
 	// last_seen_at is the sweep that most recently confirmed it still is. That
@@ -165,8 +165,8 @@ type Alert struct {
 	ShipmentETA    *time.Time `json:"shipmentEta,omitempty"`
 	// Derived read-model context so the queue can render the seven questions
 	// an exception card must answer without a second round trip.
-	RiskScore      *int            `json:"riskScore,omitempty"`
-	RiskTier       string         `json:"riskTier,omitempty"`
+	RiskScore *int   `json:"riskScore,omitempty"`
+	RiskTier  string `json:"riskTier,omitempty"`
 	// RiskBreakdown is the full server explanation (points + evidence).
 	// The exception queue renders Why-this-risk from this, never from the
 	// score alone.
@@ -199,26 +199,26 @@ type Tenant struct {
 
 // DashboardStats powers the operations dashboard.
 type DashboardStats struct {
-	ActiveShipments   int64 `json:"activeShipments"`
+	ActiveShipments    int64 `json:"activeShipments"`
 	DeliveredShipments int64 `json:"deliveredShipments"`
 	ExceptionShipments int64 `json:"exceptionShipments"`
-	OverdueShipments  int64 `json:"overdueShipments"`
-	OpenAlerts        int64 `json:"openAlerts"`
+	OverdueShipments   int64 `json:"overdueShipments"`
+	OpenAlerts         int64 `json:"openAlerts"`
 }
 
 // CarrierEvent is the normalized inbound webhook contract
 // (POST /api/v1/webhooks/carriers/{carrier}).
 type CarrierEvent struct {
 	TrackingNumber string     `json:"trackingNumber"`
-	EventID        string     `json:"eventId"`        // carrier-unique; builds dedup key
-	Code           string     `json:"code"`           // BOOKED | DEPARTED | ...
-	Description     string     `json:"description"`
+	EventID        string     `json:"eventId"` // carrier-unique; builds dedup key
+	Code           string     `json:"code"`    // BOOKED | DEPARTED | ...
+	Description    string     `json:"description"`
 	Location       string     `json:"location"`
 	Lat            *float64   `json:"lat,omitempty"`
 	Lng            *float64   `json:"lng,omitempty"`
 	OccurredAt     time.Time  `json:"occurredAt"`
-	Status         string     `json:"status"`         // resulting shipment status
-	ETA            *time.Time `json:"eta,omitempty"`  // revised ETA, if any
+	Status         string     `json:"status"`        // resulting shipment status
+	ETA            *time.Time `json:"eta,omitempty"` // revised ETA, if any
 }
 
 // DecodeCarrierEvent parses and validates a webhook body.
@@ -238,9 +238,9 @@ func DecodeCarrierEvent(body []byte) (*CarrierEvent, error) {
 
 // Envelope is the standard API response wrapper.
 type Envelope struct {
-	Data  any        `json:"data,omitempty"`
-	Error *APIError  `json:"error,omitempty"`
-	Meta  *Meta      `json:"meta,omitempty"`
+	Data  any       `json:"data,omitempty"`
+	Error *APIError `json:"error,omitempty"`
+	Meta  *Meta     `json:"meta,omitempty"`
 }
 
 // Meta carries pagination info. Total is always emitted (even 0) so clients

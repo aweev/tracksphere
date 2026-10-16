@@ -132,7 +132,7 @@ func (c *httpCarrier) Track(ctx context.Context, baseURL string, creds Credentia
 	if creds.APIKey != "" {
 		req.Header.Set("Authorization", "Bearer "+creds.APIKey)
 	}
-	
+
 	// Use circuit breaker protected client
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -143,14 +143,14 @@ func (c *httpCarrier) Track(ctx context.Context, baseURL string, creds Credentia
 		return nil, fmt.Errorf("%s: poll returned %d", c.name, resp.StatusCode)
 	}
 	var raw []struct {
-		EventID     string   `json:"eventId"`
-		Code        string   `json:"code"`
-		Description string   `json:"description"`
-		Location    string   `json:"location"`
-		Lat         *float64 `json:"lat"`
-		Lng         *float64 `json:"lng"`
-		OccurredAt  time.Time `json:"occurredAt"`
-		Status      string   `json:"status"`
+		EventID     string     `json:"eventId"`
+		Code        string     `json:"code"`
+		Description string     `json:"description"`
+		Location    string     `json:"location"`
+		Lat         *float64   `json:"lat"`
+		Lng         *float64   `json:"lng"`
+		OccurredAt  time.Time  `json:"occurredAt"`
+		Status      string     `json:"status"`
 		ETA         *time.Time `json:"eta"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
@@ -263,7 +263,7 @@ func DetectCarrier(tracking string) []map[string]any {
 func init() {
 	// Use circuit breaker protected HTTP client for carrier polling
 	carrierClient := httpclient.NewClient(httpclient.CarrierAPIClient)
-	
+
 	Register(&httpCarrier{name: "maersk", minLen: 6, httpClient: carrierClient})
 	Register(&httpCarrier{name: "dhl", minLen: 6, httpClient: carrierClient})
 	Register(&httpCarrier{name: "fedex", minLen: 6, httpClient: carrierClient})

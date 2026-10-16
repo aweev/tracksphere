@@ -30,28 +30,28 @@ func (t *TemplateEngine) RenderEmail(subject, body, trackingNumber, carrier, mod
 	if color == "" {
 		color = "#ff6b00"
 	}
-	
+
 	logo := ""
 	if t.brand.LogoURL != "" {
 		logo = fmt.Sprintf(`<img src="%s" alt="%s" style="max-height: 40px; margin-bottom: 16px;">`, t.brand.LogoURL, t.brand.CompanyName)
 	}
-	
+
 	companyName := t.brand.CompanyName
 	if companyName == "" {
 		companyName = "TrackSphere"
 	}
-	
+
 	supportEmail := t.brand.SupportEmail
 	if supportEmail == "" {
 		supportEmail = "support@tracksphere.io"
 	}
-	
+
 	// Build ETA line
 	etaLine := ""
 	if eta != nil && *eta != "" {
 		etaLine = fmt.Sprintf(`<tr><td style="padding: 8px 0; color: #64748b;">Estimated Arrival:</td><td style="padding: 8px 0; font-family: monospace; font-weight: 600; color: #0f172a;">%s</td></tr>`, *eta)
 	}
-	
+
 	return fmt.Sprintf(`
 <!DOCTYPE html>
 <html>
@@ -115,9 +115,9 @@ func (t *TemplateEngine) RenderEmail(subject, body, trackingNumber, carrier, mod
   </div>
 </body>
 </html>
-`, subject, color, logo, companyName, subject, body, trackingNumber, carrier, mode, origin, destination, 
-   statusBackground(status), statusText(status), strings.Title(status), etaLine,
-   companyName, supportEmail, color, supportEmail, companyName)
+`, subject, color, logo, companyName, subject, body, trackingNumber, carrier, mode, origin, destination,
+		statusBackground(status), statusText(status), strings.Title(status), etaLine,
+		companyName, supportEmail, color, supportEmail, companyName)
 }
 
 // RenderSMS renders a branded SMS template
@@ -135,12 +135,12 @@ func (t *TemplateEngine) RenderWhatsApp(subject, body, trackingNumber, carrier, 
 	if companyName == "" {
 		companyName = "TrackSphere"
 	}
-	
+
 	etaLine := ""
 	if eta != nil && *eta != "" {
 		etaLine = fmt.Sprintf("\nETA: %s", *eta)
 	}
-	
+
 	return fmt.Sprintf(`*%s Update*
 %s
 

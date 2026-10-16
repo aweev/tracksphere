@@ -99,7 +99,7 @@ func TestEstimateETA_Modes(t *testing.T) {
 		}
 	}
 	// Unknown mode falls back to road.
-	if !EstimateETA("hyperloop", created).Equal(created.Add(5*24*time.Hour)) {
+	if !EstimateETA("hyperloop", created).Equal(created.Add(5 * 24 * time.Hour)) {
 		t.Error("unknown mode should fall back to road baseline")
 	}
 }

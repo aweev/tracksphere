@@ -175,14 +175,14 @@ func HandlePoll(pool *pgxpool.Pool, log *slog.Logger, secretKeys [][]byte, newSv
 			return nil // no active shipments, or credential inactive
 		}
 
-var creds carriers.Credentials
-	if sealed != "" {
-		plain, err := auth.OpenMulti(secretKeys, sealed)
-		if err != nil {
-			return err
+		var creds carriers.Credentials
+		if sealed != "" {
+			plain, err := auth.OpenMulti(secretKeys, sealed)
+			if err != nil {
+				return err
+			}
+			_ = json.Unmarshal(plain, &creds)
 		}
-		_ = json.Unmarshal(plain, &creds)
-	}
 
 		// ── Phase 2: network I/O with no database connection held ─────────
 		type fetched struct {

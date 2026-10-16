@@ -19,7 +19,7 @@ import (
 type contextKey int
 
 const (
-	ctxUserKey      contextKey = iota
+	ctxUserKey contextKey = iota
 	ctxTenantKey
 	ctxCSPNonceKey
 )
@@ -105,7 +105,7 @@ func (s *Server) versioningMiddleware(next http.Handler) http.Handler {
 		// Set API version headers
 		w.Header().Set("X-API-Version", "v1")
 		w.Header().Set("X-API-Deprecated", "false")
-		
+
 		// Check for deprecated version in Accept-Version header.
 		// No v2 exists: there is no Sunset date and no successor link (a
 		// hardcoded fictional domain here would be worse than no header).
@@ -114,7 +114,7 @@ func (s *Server) versioningMiddleware(next http.Handler) http.Handler {
 			w.Header().Set("X-API-Deprecated", "true")
 			w.Header().Set("Deprecation", "true")
 		}
-		
+
 		next.ServeHTTP(w, r)
 	})
 }

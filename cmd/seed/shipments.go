@@ -61,7 +61,7 @@ type demoAlert struct {
 
 type demoShipment struct {
 	tracking, ref, carrier, mode, origin, dest, status string
-	events                                              []demoEvent
+	events                                             []demoEvent
 	etaIn                                              time.Duration // eta = now + etaIn
 	openAlert                                          *demoAlert
 }

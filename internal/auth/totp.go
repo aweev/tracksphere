@@ -14,10 +14,10 @@ import (
 // ── TOTP (RFC 6238, SHA-1, 6 digits, 30s step — Google Authenticator compat) ──
 
 const (
-	totpStep    = 30
-	totpDigits  = 6
-	totpWindow  = 1 // accept previous/next step to absorb clock drift
-	issuerName  = "TrackSphere"
+	totpStep   = 30
+	totpDigits = 6
+	totpWindow = 1 // accept previous/next step to absorb clock drift
+	issuerName = "TrackSphere"
 )
 
 // NewTOTPSecret returns a fresh base32-encoded TOTP secret (no padding).

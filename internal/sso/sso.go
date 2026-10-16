@@ -2,10 +2,10 @@
 // with the standard library only — discovery, code exchange, JWKS RS256
 // verification. SAML stays an enterprise add-on (interface note below).
 //
-//   SSO_GOOGLE_CLIENT_ID / SSO_GOOGLE_CLIENT_SECRET / SSO_GOOGLE_REDIRECT_URL
-//   SSO_MICROSOFT_CLIENT_ID / SSO_MICROSOFT_CLIENT_SECRET / SSO_MICROSOFT_REDIRECT_URL
-//   SSO_AUTOPROVISION=1   → unknown verified emails get a fresh tenant+owner
-//                         (default 0: SSO is login-only for existing users)
+//	SSO_GOOGLE_CLIENT_ID / SSO_GOOGLE_CLIENT_SECRET / SSO_GOOGLE_REDIRECT_URL
+//	SSO_MICROSOFT_CLIENT_ID / SSO_MICROSOFT_CLIENT_SECRET / SSO_MICROSOFT_REDIRECT_URL
+//	SSO_AUTOPROVISION=1   → unknown verified emails get a fresh tenant+owner
+//	                      (default 0: SSO is login-only for existing users)
 package sso
 
 import (
@@ -58,10 +58,10 @@ func Google() *Provider {
 	}
 	return &Provider{
 		Slug: "google", IssuerPrefix: "https://accounts.google.com",
-		Discovery:   "https://accounts.google.com/.well-known/openid-configuration",
-		ClientID:    id, Secret: secret, RedirectURL: redirect,
-		AuthURL:     "https://accounts.google.com/o/oauth2/v2/auth",
-		TokenURL:    "https://oauth2.googleapis.com/token",
+		Discovery: "https://accounts.google.com/.well-known/openid-configuration",
+		ClientID:  id, Secret: secret, RedirectURL: redirect,
+		AuthURL:  "https://accounts.google.com/o/oauth2/v2/auth",
+		TokenURL: "https://oauth2.googleapis.com/token",
 	}
 }
 
@@ -73,10 +73,10 @@ func Microsoft() *Provider {
 	}
 	return &Provider{
 		Slug: "microsoft", IssuerPrefix: "https://login.microsoftonline.com/",
-		Discovery:   "https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration",
-		ClientID:    id, Secret: secret, RedirectURL: redirect,
-		AuthURL:     "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
-		TokenURL:    "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+		Discovery: "https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration",
+		ClientID:  id, Secret: secret, RedirectURL: redirect,
+		AuthURL:  "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+		TokenURL: "https://login.microsoftonline.com/common/oauth2/v2.0/token",
 	}
 }
 
@@ -290,7 +290,7 @@ func (p *Provider) verify(ctx context.Context, raw string) (*Identity, error) {
 	}
 	return &Identity{
 		Provider: p.Slug, Subject: claims.Sub,
-		Email: strings.ToLower(strings.TrimSpace(claims.Email)),
+		Email:         strings.ToLower(strings.TrimSpace(claims.Email)),
 		EmailVerified: verified, Name: claims.Name,
 	}, nil
 }

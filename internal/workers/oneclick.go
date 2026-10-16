@@ -86,13 +86,13 @@ func HandleNotifyCustomer(q *queue.Queue, log *slog.Logger) func(context.Context
 			brand := getTenantBranding(ctx, tx, p.TenantID)
 			templateEngine := notify.NewTemplateEngine(brand)
 
-		// Get active subscriptions for this shipment. digest_only subscribers
-		// wait for the digest by promise — a one-click action is still an
-		// explicit human interrupt (ADR 0009 bypass), but it must not
-		// surprise a subscriber who asked never to be interrupted. The
-		// explicit per-recipient one-click path (HandleEmailCarrier) is the
-		// bypass; broadcast fan-out respects digest_only.
-		rows, err := tx.Query(ctx, `
+			// Get active subscriptions for this shipment. digest_only subscribers
+			// wait for the digest by promise — a one-click action is still an
+			// explicit human interrupt (ADR 0009 bypass), but it must not
+			// surprise a subscriber who asked never to be interrupted. The
+			// explicit per-recipient one-click path (HandleEmailCarrier) is the
+			// bypass; broadcast fan-out respects digest_only.
+			rows, err := tx.Query(ctx, `
 			SELECT channel, recipient FROM tracking_subscriptions
 			WHERE shipment_id=$1 AND status='active' AND NOT digest_only`, p.ShipmentID)
 			if err != nil {
@@ -164,7 +164,7 @@ func HandleNotifyCustomer(q *queue.Queue, log *slog.Logger) func(context.Context
 					TenantID: p.TenantID, ShipmentID: p.ShipmentID,
 					Channel: sub.Channel, To: sub.Recipient,
 					Subject: subject, Body: renderedBody,
-					Provider: sender.Name(),
+					Provider:  sender.Name(),
 					DedupeKey: sendKey("notify.customer", p.Nonce, sub.Channel, sub.Recipient),
 				}
 				owned, _, err := claimSendTx(ctx, tx, ps)
@@ -263,7 +263,7 @@ func HandleEmailCarrier(q *queue.Queue, log *slog.Logger) func(context.Context, 
 				TenantID: p.TenantID, ShipmentID: p.ShipmentID,
 				Channel: "email", To: carrierEmail,
 				Subject: subject, Body: emailBody,
-				Provider: sender.Name(),
+				Provider:  sender.Name(),
 				DedupeKey: sendKey("email.carrier", p.Nonce, carrierEmail),
 			}
 			owned, _, err := claimSendTx(ctx, tx, ps)

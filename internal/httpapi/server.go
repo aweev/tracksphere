@@ -20,14 +20,14 @@ import (
 
 // Server aggregates dependencies for all handlers.
 type Server struct {
-	cfg        *config.Config
-	pool       *pgxpool.Pool
-	shipments  *shipments.Repository
-	svc        *shipments.Service
-	hub        *realtime.Hub
-	log        *slog.Logger
-	startedAt  time.Time
-	limiter    *RateLimiter
+	cfg       *config.Config
+	pool      *pgxpool.Pool
+	shipments *shipments.Repository
+	svc       *shipments.Service
+	hub       *realtime.Hub
+	log       *slog.Logger
+	startedAt time.Time
+	limiter   *RateLimiter
 }
 
 // NewServer constructs the API server.
@@ -120,14 +120,14 @@ func (s *Server) Router() http.Handler {
 
 			r.Get("/auth/me", s.requireRole(RoleMember, s.handleMe))
 			r.Post("/auth/logout", s.requireRole(RoleMember, s.handleLogout))
-		r.Post("/auth/mfa/enroll", s.requireRole(RoleMember,
-			s.rateLimit("mfa-enroll", 5, time.Minute, s.handleMFAEnroll)))
-		r.Post("/auth/mfa/enable", s.requireRole(RoleMember,
-			s.rateLimit("mfa-enroll", 5, time.Minute, s.handleMFAEnable)))
-		r.Post("/auth/mfa/disable", s.requireRole(RoleMember,
-			s.rateLimit("mfa-enroll", 5, time.Minute, s.handleMFADisable)))
-		r.Post("/auth/mfa/recovery-codes", s.requireRole(RoleMember,
-			s.rateLimit("mfa-enroll", 5, time.Minute, s.handleMFARecoveryCodes)))
+			r.Post("/auth/mfa/enroll", s.requireRole(RoleMember,
+				s.rateLimit("mfa-enroll", 5, time.Minute, s.handleMFAEnroll)))
+			r.Post("/auth/mfa/enable", s.requireRole(RoleMember,
+				s.rateLimit("mfa-enroll", 5, time.Minute, s.handleMFAEnable)))
+			r.Post("/auth/mfa/disable", s.requireRole(RoleMember,
+				s.rateLimit("mfa-enroll", 5, time.Minute, s.handleMFADisable)))
+			r.Post("/auth/mfa/recovery-codes", s.requireRole(RoleMember,
+				s.rateLimit("mfa-enroll", 5, time.Minute, s.handleMFARecoveryCodes)))
 			r.Get("/auth/sessions", s.requireRole(RoleMember, s.handleListSessions))
 			r.Delete("/auth/sessions/{id}", s.requireRole(RoleMember, s.handleRevokeSession))
 			r.Post("/auth/password/change", s.requireRole(RoleMember, s.handleChangePassword))
@@ -136,26 +136,26 @@ func (s *Server) Router() http.Handler {
 			r.Post("/team/invite", s.requireRole(RoleAdmin, s.handleInvite))
 			r.Post("/team/{id}/deactivate", s.requireRole(RoleAdmin, s.handleDeactivate))
 
-r.Get("/dashboard", s.requireRole(RoleMember, s.handleDashboard))
-		r.Get("/billing", s.requireRole(RoleMember, s.handleBilling))
-		r.Get("/shipments", s.requireRole(RoleMember, s.handleListShipments))
-		// Mutations are admin+ : members are read-mostly, so a compromised
-		// member seat cannot fabricate shipments or rewrite history.
-		r.Post("/shipments", s.requireRole(RoleAdmin, s.handleCreateShipment))
-		r.Post("/shipments:batch", s.requireRole(RoleAdmin, s.handleBatchCreate))
-		r.Get("/shipments/{id}", s.requireRole(RoleMember, s.handleGetShipment))
-		r.Patch("/shipments/{id}", s.requireRole(RoleAdmin, s.handleUpdateShipment))
-		r.Get("/shipments/{id}/events", s.requireRole(RoleMember, s.handleShipmentEvents))
-		r.Post("/shipments/{id}/events", s.requireRole(RoleAdmin, s.handleManualEvent))
-		// One-click triage actions from the exception queue (admin+: an
-		// operator explicitly sending mail, not an automated rule).
-		r.Post("/shipments/{id}/notify", s.requireRole(RoleAdmin, s.handleNotifyCustomer))
-		r.Post("/shipments/{id}/email-carrier", s.requireRole(RoleAdmin, s.handleEmailCarrier))
+			r.Get("/dashboard", s.requireRole(RoleMember, s.handleDashboard))
+			r.Get("/billing", s.requireRole(RoleMember, s.handleBilling))
+			r.Get("/shipments", s.requireRole(RoleMember, s.handleListShipments))
+			// Mutations are admin+ : members are read-mostly, so a compromised
+			// member seat cannot fabricate shipments or rewrite history.
+			r.Post("/shipments", s.requireRole(RoleAdmin, s.handleCreateShipment))
+			r.Post("/shipments:batch", s.requireRole(RoleAdmin, s.handleBatchCreate))
+			r.Get("/shipments/{id}", s.requireRole(RoleMember, s.handleGetShipment))
+			r.Patch("/shipments/{id}", s.requireRole(RoleAdmin, s.handleUpdateShipment))
+			r.Get("/shipments/{id}/events", s.requireRole(RoleMember, s.handleShipmentEvents))
+			r.Post("/shipments/{id}/events", s.requireRole(RoleAdmin, s.handleManualEvent))
+			// One-click triage actions from the exception queue (admin+: an
+			// operator explicitly sending mail, not an automated rule).
+			r.Post("/shipments/{id}/notify", s.requireRole(RoleAdmin, s.handleNotifyCustomer))
+			r.Post("/shipments/{id}/email-carrier", s.requireRole(RoleAdmin, s.handleEmailCarrier))
 
-		r.Get("/alerts", s.requireRole(RoleMember, s.handleListAlerts))
-		r.Post("/alerts/{id}/resolve", s.requireRole(RoleAdmin, s.resolveHandler))
-		r.Post("/alerts/{id}/assign", s.requireRole(RoleAdmin, s.handleAssignAlert))
-		r.Post("/alerts/{id}/note", s.requireRole(RoleAdmin, s.handleNoteAlert))
+			r.Get("/alerts", s.requireRole(RoleMember, s.handleListAlerts))
+			r.Post("/alerts/{id}/resolve", s.requireRole(RoleAdmin, s.resolveHandler))
+			r.Post("/alerts/{id}/assign", s.requireRole(RoleAdmin, s.handleAssignAlert))
+			r.Post("/alerts/{id}/note", s.requireRole(RoleAdmin, s.handleNoteAlert))
 
 			r.Get("/analytics", s.requireRole(RoleMember, s.handleAnalytics))
 			r.Get("/analytics/digest", s.requireRole(RoleMember, s.handleDigest))
@@ -171,15 +171,15 @@ r.Get("/dashboard", s.requireRole(RoleMember, s.handleDashboard))
 			r.Delete("/carriers/{carrier}", s.requireRole(RoleAdmin, s.handleDeleteCarrier))
 			r.Post("/carriers/{carrier}/poll", s.requireRole(RoleAdmin, s.handleTriggerPoll))
 
-r.Get("/shipments/{id}/legs", s.requireRole(RoleMember, s.handleListLegs))
-		r.Post("/shipments/{id}/legs", s.requireRole(RoleAdmin, s.handleCreateLeg))
-		r.Delete("/legs/{id}", s.requireRole(RoleAdmin, s.handleDeleteLeg))
+			r.Get("/shipments/{id}/legs", s.requireRole(RoleMember, s.handleListLegs))
+			r.Post("/shipments/{id}/legs", s.requireRole(RoleAdmin, s.handleCreateLeg))
+			r.Delete("/legs/{id}", s.requireRole(RoleAdmin, s.handleDeleteLeg))
 
-		r.Get("/shipments/{id}/documents", s.requireRole(RoleMember, s.handleListDocuments))
-		r.Post("/shipments/{id}/documents", s.requireRole(RoleAdmin, s.handleUploadDocument))
-		r.Get("/documents/{id}/download", s.requireRole(RoleMember, s.handleDownloadDocument))
-		r.Delete("/documents/{id}", s.requireRole(RoleAdmin, s.handleDeleteDocument))
-		r.Get("/shipments/{id}/audit", s.requireRole(RoleMember, s.handleListShipmentAudit))
+			r.Get("/shipments/{id}/documents", s.requireRole(RoleMember, s.handleListDocuments))
+			r.Post("/shipments/{id}/documents", s.requireRole(RoleAdmin, s.handleUploadDocument))
+			r.Get("/documents/{id}/download", s.requireRole(RoleMember, s.handleDownloadDocument))
+			r.Delete("/documents/{id}", s.requireRole(RoleAdmin, s.handleDeleteDocument))
+			r.Get("/shipments/{id}/audit", s.requireRole(RoleMember, s.handleListShipmentAudit))
 
 			r.Get("/branding", s.requireRole(RoleMember, s.handleGetBranding))
 			r.Put("/branding", s.requireRole(RoleAdmin, s.handleUpdateBranding))

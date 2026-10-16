@@ -82,12 +82,12 @@ type Breakdown struct {
 // Weights. Deliberately bounded and documented: an unexplainable score is worse
 // than no score, because operators learn to distrust the ordering.
 const (
-	wDwellMax      = 35.0 // overrunning the expected transit
-	wSlipMax       = 20.0 // ETA moved later than promised
-	wStaleMax      = 25.0 // silence from the carrier, relative to lane norm
-	wCriticalAlert = 15.0 // per critical open alert
-	wAlert         = 3.0  // per warning/info open alert
-	wValueMax      = 15.0 // declared commercial exposure
+	wDwellMax      = 35.0  // overrunning the expected transit
+	wSlipMax       = 20.0  // ETA moved later than promised
+	wStaleMax      = 25.0  // silence from the carrier, relative to lane norm
+	wCriticalAlert = 15.0  // per critical open alert
+	wAlert         = 3.0   // per warning/info open alert
+	wValueMax      = 15.0  // declared commercial exposure
 	notifiedRelief = -10.0 // customer already told: lower urgency
 )
 
@@ -204,29 +204,29 @@ func TierFor(score int) string {
 // Both the single-row and the batch path produce these, so the scoring below
 // runs identically regardless of how the facts were fetched.
 type refreshFacts struct {
-	shipmentID                   uuid.UUID
-	tracking, carrier, mode      string
-	origin, dest, status         string
-	isPublic                     bool
-	createdAt, shippedAt         *time.Time
-	deliveredAt                  *time.Time
-	originalETA                  *time.Time
-	lastEventAt                  *time.Time
-	lastEventCode                *string
-	declaredValue                *float64
-	openAlerts, criticalAlerts   int
-	otherAlerts                  int
-	notified                     bool
+	shipmentID                 uuid.UUID
+	tracking, carrier, mode    string
+	origin, dest, status       string
+	isPublic                   bool
+	createdAt, shippedAt       *time.Time
+	deliveredAt                *time.Time
+	originalETA                *time.Time
+	lastEventAt                *time.Time
+	lastEventCode              *string
+	declaredValue              *float64
+	openAlerts, criticalAlerts int
+	otherAlerts                int
+	notified                   bool
 }
 
 // refreshResult is everything computed from facts: the score, its
 // explanation, and every derived column the upsert writes.
 type refreshResult struct {
-	tier                       string
-	scoreInt                   int
-	breakdown                  Breakdown
-	etaSource                  string
-	etaConfidence              float64
+	tier                        string
+	scoreInt                    int
+	breakdown                   Breakdown
+	etaSource                   string
+	etaConfidence               float64
 	staleHours, dwell, expected *float64
 	slip, ratio, valueAtRisk    *float64
 }
@@ -668,7 +668,7 @@ func refreshManyAt(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID, ids []uui
 	}
 	return len(done), nil
 }
-//
+
 // Work is driven by shipments.needs_refresh, which writers set and Refresh
 // clears — not by a time window. The previous predicate (updated_at older
 // than 15 minutes, evaluated hourly) qualified every row on every pass, which

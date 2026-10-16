@@ -107,17 +107,17 @@ func HandleNotifyShipment(pool *pgxpool.Pool, log *slog.Logger) func(context.Con
 				recipients = append(recipients, struct{ channel, to string }{"system", "ops@localhost"})
 			}
 
-		for _, rc := range recipients {
-			// Metered-channel kill-switch (P2-4): skip before the audit
-			// row, so a suppressed send leaves no false "delivered"
-			// record. Owner-email and system fallbacks are unmetered.
-			if !meteredAllowed(ctx, tx, p.TenantID, rc.channel) {
-				log.Warn("eta notify: metered channel disabled, skipped",
-					"channel", rc.channel, "shipment", p.ShipmentID)
-				continue
-			}
-			sender := notify.ForChannel(log, rc.channel)
-			_, err = tx.Exec(ctx, `
+			for _, rc := range recipients {
+				// Metered-channel kill-switch (P2-4): skip before the audit
+				// row, so a suppressed send leaves no false "delivered"
+				// record. Owner-email and system fallbacks are unmetered.
+				if !meteredAllowed(ctx, tx, p.TenantID, rc.channel) {
+					log.Warn("eta notify: metered channel disabled, skipped",
+						"channel", rc.channel, "shipment", p.ShipmentID)
+					continue
+				}
+				sender := notify.ForChannel(log, rc.channel)
+				_, err = tx.Exec(ctx, `
 					INSERT INTO notifications (tenant_id, shipment_id, channel, recipient, subject, body, provider)
 					VALUES ($1,$2,$3,$4,$5,$6,$7)`,
 					p.TenantID, p.ShipmentID, rc.channel, rc.to, subject, msgBody, sender.Name())
@@ -190,10 +190,10 @@ func HandleRecalculateETA(pool *pgxpool.Pool, log *slog.Logger) func(context.Con
 				return err
 			}
 			notice, _ := json.Marshal(map[string]any{
-				"type":       "shipment.updated",
-				"tenant_id":  p.TenantID,
+				"type":        "shipment.updated",
+				"tenant_id":   p.TenantID,
 				"shipment_id": p.ShipmentID,
-				"data":       map[string]any{"eta": newETA},
+				"data":        map[string]any{"eta": newETA},
 			})
 			_, err := tx.Exec(ctx, `SELECT notify_tracksphere($1)`, string(notice))
 			return err

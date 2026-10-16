@@ -148,11 +148,11 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		status = http.StatusServiceUnavailable
 	}
 	writeJSON(w, status, map[string]any{
-		"status":    map[bool]string{true: "ok", false: "degraded"}[dbOK],
-		"database":  dbOK,
+		"status":     map[bool]string{true: "ok", false: "degraded"}[dbOK],
+		"database":   dbOK,
 		"sseClients": s.hub.Count(),
-		"uptimeSec": int(time.Since(s.startedAt).Seconds()),
-		"version":   buildVersion,
+		"uptimeSec":  int(time.Since(s.startedAt).Seconds()),
+		"version":    buildVersion,
 	})
 }
 

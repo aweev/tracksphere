@@ -1,10 +1,10 @@
 // Package notify implements P2 outbound providers: the Sender interface,
 // a registry, and real implementations selectable via environment.
 //
-//   TRACKSPHERE_NOTIFY_DEFAULT=log|print    (print = stdout, for staging debug)
-//   SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM   → email provider
-//   TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM      → sms + whatsapp
-//   TRACKSPHERE_NOTIFY_WEBHOOK_URL                          → POST JSON copy
+//	TRACKSPHERE_NOTIFY_DEFAULT=log|print    (print = stdout, for staging debug)
+//	SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM   → email provider
+//	TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM      → sms + whatsapp
+//	TRACKSPHERE_NOTIFY_WEBHOOK_URL                          → POST JSON copy
 //
 // Anything unconfigured falls back to `log` (structured log + DB audit row),
 // so staging works with zero secrets and production degrades loudly, never

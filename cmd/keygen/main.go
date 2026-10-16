@@ -1,9 +1,9 @@
 // Command keygen generates and manages encryption keys for TrackSphere.
 // Usage:
 //
-//   keygen                    # Generate a new 32-byte secret key (base64)
-//   keygen rotate             # Print rotation instructions + new key
-//   keygen list               # List keys from config (if multi-key configured)
+//	keygen                    # Generate a new 32-byte secret key (base64)
+//	keygen rotate             # Print rotation instructions + new key
+//	keygen list               # List keys from config (if multi-key configured)
 package main
 
 import (

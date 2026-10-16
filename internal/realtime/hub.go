@@ -34,10 +34,10 @@ type subscriber struct {
 
 // Hub manages SSE subscribers.
 type Hub struct {
-	mu       sync.RWMutex
-	subs     map[uuid.UUID]*subscriber // by subscriber id
-	log      *slog.Logger
-	pool     *pgxpool.Pool // for recording subscriptions
+	mu   sync.RWMutex
+	subs map[uuid.UUID]*subscriber // by subscriber id
+	log  *slog.Logger
+	pool *pgxpool.Pool // for recording subscriptions
 }
 
 // NewHub creates an empty hub.
@@ -171,10 +171,10 @@ func (h *Hub) Count() int {
 
 // payload from pg_notify
 type notifyEnvelope struct {
-	Type      string     `json:"type"`
-	TenantID  uuid.UUID  `json:"tenant_id"`
+	Type       string     `json:"type"`
+	TenantID   uuid.UUID  `json:"tenant_id"`
 	ShipmentID *uuid.UUID `json:"shipment_id,omitempty"`
-	Data      any        `json:"data,omitempty"`
+	Data       any        `json:"data,omitempty"`
 }
 
 // Run listens on the Postgres channel until ctx is cancelled, republishing

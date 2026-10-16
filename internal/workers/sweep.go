@@ -74,11 +74,11 @@ type Rule struct {
 
 // Scope narrows which shipments a rule considers.
 type Scope struct {
-	Modes     []string `json:"modes"`
-	Carriers  []string `json:"carriers"`
-	MinValue  float64  `json:"minValue"`
-	Origins   []string `json:"origins"`
-	Statuses  []string `json:"statuses"`
+	Modes    []string `json:"modes"`
+	Carriers []string `json:"carriers"`
+	MinValue float64  `json:"minValue"`
+	Origins  []string `json:"origins"`
+	Statuses []string `json:"statuses"`
 }
 
 // Condition is the fact comparison. Kept deliberately small: an expression
@@ -96,10 +96,10 @@ type Condition struct {
 
 // Raise describes what the rule does when its condition is true.
 type Raise struct {
-	Title      string   `json:"title"`
-	Message    string   `json:"message"`
-	RootCause  string   `json:"rootCause"`
-	Recommend  string   `json:"recommend"`
+	Title     string `json:"title"`
+	Message   string `json:"message"`
+	RootCause string `json:"rootCause"`
+	Recommend string `json:"recommend"`
 	// Interrupt requests an interrupting notification. Only 'critical' is
 	// permitted to set it, and the budget still applies on top.
 	Interrupt bool `json:"interrupt"`

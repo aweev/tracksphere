@@ -52,7 +52,7 @@ func (s *Server) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 		lanes                                []laneStat
 	)
 	err := db.WithTenant(r.Context(), s.pool, user.TenantID, func(tx pgx.Tx) error {
-if err := tx.QueryRow(r.Context(), `
+		if err := tx.QueryRow(r.Context(), `
 			SELECT count(*),
 			       count(*) FILTER (WHERE status='delivered'),
 			       count(*) FILTER (WHERE status='delivered'

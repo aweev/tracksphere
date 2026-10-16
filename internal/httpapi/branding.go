@@ -19,10 +19,10 @@ import (
 // White-label branding + public "notify me" subscriptions.
 
 type brandView struct {
-	Company  string `json:"company"`
-	Color    string `json:"color"`
-	Logo     string `json:"logo"`
-	Support  string `json:"support"`
+	Company string `json:"company"`
+	Color   string `json:"color"`
+	Logo    string `json:"logo"`
+	Support string `json:"support"`
 }
 
 func (s *Server) brandFor(ctx context.Context, tenantID string) brandView {
@@ -304,8 +304,8 @@ func (s *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 		status = http.StatusOK
 	}
 	writeJSON(w, status, map[string]any{
-		"ok": true,
-		"status": res.status,
+		"ok":      true,
+		"status":  res.status,
 		"channel": channel,
 		"message": confirmMessage(res.status),
 	})

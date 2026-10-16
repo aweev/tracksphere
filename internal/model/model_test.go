@@ -29,10 +29,10 @@ func TestDecodeCarrierEvent_Valid(t *testing.T) {
 
 func TestDecodeCarrierEvent_MissingFields(t *testing.T) {
 	cases := []string{
-		`{"eventId":"x","code":"DEPARTED","occurredAt":"2026-05-16T10:00:00Z"}`, // no tracking
+		`{"eventId":"x","code":"DEPARTED","occurredAt":"2026-05-16T10:00:00Z"}`,           // no tracking
 		`{"trackingNumber":"TS-1","code":"DEPARTED","occurredAt":"2026-05-16T10:00:00Z"}`, // no eventId
 		`{"trackingNumber":"TS-1","eventId":"x","occurredAt":"2026-05-16T10:00:00Z"}`,     // no code
-		`{"trackingNumber":"TS-1","eventId":"x","code":"DEPARTED"}`,                        // no occurredAt
+		`{"trackingNumber":"TS-1","eventId":"x","code":"DEPARTED"}`,                       // no occurredAt
 	}
 	for i, c := range cases {
 		if _, err := DecodeCarrierEvent([]byte(c)); err == nil {

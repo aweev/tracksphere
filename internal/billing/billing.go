@@ -2,11 +2,11 @@
 // only (no SDK): Checkout Sessions via form-POST, webhook verification via
 // the Stripe-Signature scheme (t=...,v1=... HMAC-SHA256 over "t.payload").
 //
-//   STRIPE_SECRET_KEY            → enables checkout (else "contact sales")
-//   STRIPE_WEBHOOK_SECRET        → verifies POST /billing/webhook
-//   STRIPE_PRICE_GROWTH          → price ID for the growth plan
-//   STRIPE_PRICE_ENTERPRISE      → price ID for the enterprise plan
-//   TRACKSPHERE_BILLING_SUCCESS_URL / CANCEL_URL → checkout redirects
+//	STRIPE_SECRET_KEY            → enables checkout (else "contact sales")
+//	STRIPE_WEBHOOK_SECRET        → verifies POST /billing/webhook
+//	STRIPE_PRICE_GROWTH          → price ID for the growth plan
+//	STRIPE_PRICE_ENTERPRISE      → price ID for the enterprise plan
+//	TRACKSPHERE_BILLING_SUCCESS_URL / CANCEL_URL → checkout redirects
 package billing
 
 import (
@@ -96,13 +96,13 @@ type WebhookEvent struct {
 	Type string `json:"type"`
 	Data struct {
 		Object struct {
-			ID             string `json:"id"`
-			Customer       any    `json:"customer"`
-			ClientRef      string `json:"client_reference_id"`
-			Subscription   any    `json:"subscription"`
-			Status         string `json:"status"`
-			CurrentPeriodEnd int64 `json:"current_period_end"`
-			Metadata       map[string]string `json:"metadata"`
+			ID               string            `json:"id"`
+			Customer         any               `json:"customer"`
+			ClientRef        string            `json:"client_reference_id"`
+			Subscription     any               `json:"subscription"`
+			Status           string            `json:"status"`
+			CurrentPeriodEnd int64             `json:"current_period_end"`
+			Metadata         map[string]string `json:"metadata"`
 		} `json:"object"`
 	} `json:"data"`
 }

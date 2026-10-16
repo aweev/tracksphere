@@ -137,11 +137,11 @@ func (q *Queue) EnqueueTenant(ctx context.Context, tenantID uuid.UUID, kind stri
 }
 
 type jobRow struct {
-	ID           int64
-	Kind         string
-	Payload      []byte
-	Attempts     int
-	MaxAttempts  int
+	ID          int64
+	Kind        string
+	Payload     []byte
+	Attempts    int
+	MaxAttempts int
 }
 
 // claim atomically grabs the next pending job as workerID. Returns nil when idle.
@@ -354,7 +354,12 @@ func (q *Queue) RunAs(ctx context.Context, workerID string) {
 // Reconnects with backoff; the poll interval remains the fallback so a missed
 // notify only costs latency, never a job.
 func (q *Queue) listenJobs(ctx context.Context, wake chan struct{}) {
-	notify := func() { select { case wake <- struct{}{}: default: } }
+	notify := func() {
+		select {
+		case wake <- struct{}{}:
+		default:
+		}
+	}
 	for ctx.Err() == nil {
 		conn, err := q.pool.Acquire(ctx)
 		if err != nil {
