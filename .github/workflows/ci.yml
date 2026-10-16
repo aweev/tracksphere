@@ -17,6 +17,10 @@ jobs:
           cache: true
       - run: go vet ./...
       - run: go test -race ./... -count=1
+      - name: gofmt (no diff output allowed)
+        run: test -z "$(gofmt -l cmd internal)"
+      - name: CRLF guard (repo is LF-only except *.ps1 by .gitattributes)
+        run: test -z "$(git grep -I -l "$(printf '\r')" -- . ':!*.ps1' ':!*.png' ':!*.jpg' ':!*.ico' ':!*.woff2')" || (echo 'CRLF found outside *.ps1 — save as LF'; exit 1)
       - name: govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
       - name: staticcheck (dead code + suspect constructs)
