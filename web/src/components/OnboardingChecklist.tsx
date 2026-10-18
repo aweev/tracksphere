@@ -61,6 +61,16 @@ export function OnboardingChecklist() {
     queryFn: async () =>
       (await api.get<AlertPage>('/api/v1/alerts?status=open&limit=1')).data,
   });
+  const { data: carriers } = useQuery({
+    queryKey: ['carriers', 'onboarding'],
+    queryFn: async () =>
+      (
+        await api.get<{
+          supported: string[];
+          credentials: { id: string; active: boolean }[];
+        }>('/api/v1/carriers')
+      ).data,
+  });
 
   const totalShipments = (stats?.activeShipments ?? 0) + (stats?.deliveredShipments ?? 0);
   const hasShipments = totalShipments > 0;
@@ -90,6 +100,18 @@ export function OnboardingChecklist() {
   if (dismissed) return null;
 
   const steps = [
+    {
+      done: (carriers?.credentials ?? []).some((c) => c.active),
+      title: 'Connect a carrier credentials set',
+      hint: 'One key gives the poller a real feed — or push carrier webhooks straight in.',
+      action: admin ? (
+        <Link href="/integrations" className={OB_ACTION}>
+          Open integrations →
+        </Link>
+      ) : (
+        <span className="text-xs text-slate-500">Ask an admin to add credentials.</span>
+      ),
+    },
     {
       done: hasShipments,
       title: 'Add your first shipment',
