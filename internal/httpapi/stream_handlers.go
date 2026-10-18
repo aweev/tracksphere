@@ -136,6 +136,10 @@ func (s *Server) serveSSE(w http.ResponseWriter, r *http.Request, flusher http.F
 }
 
 // handleHealth GET /api/v1/health — liveness + dependency ping + hub stats.
+//
+// Load-balancer contract: 200 only when the DB pings. Queue depth and pool
+// saturation ride along as fields (not status) so dashboards can alert
+// without flapping the LB; see docs/SLO.md §4 (queue>1000, pool>80%).
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	dbOK := true
 	pingCtx, cancel := timeoutContext(r, 2*time.Second)
@@ -143,16 +147,30 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if err := s.pool.Ping(pingCtx); err != nil {
 		dbOK = false
 	}
+	// Best-effort depth: a failing count must not fail the probe itself.
+	var pending, dead int64 = -1, -1
+	if dbOK {
+		qctx, qcancel := timeoutContext(r, 2*time.Second)
+		_ = s.pool.QueryRow(qctx,
+			`SELECT count(*) FILTER (WHERE status='pending'), count(*) FILTER (WHERE status='dead') FROM jobs`).Scan(&pending, &dead)
+		qcancel()
+	}
+	st := s.pool.Stat()
 	status := http.StatusOK
 	if !dbOK {
 		status = http.StatusServiceUnavailable
 	}
 	writeJSON(w, status, map[string]any{
-		"status":     map[bool]string{true: "ok", false: "degraded"}[dbOK],
-		"database":   dbOK,
-		"sseClients": s.hub.Count(),
-		"uptimeSec":  int(time.Since(s.startedAt).Seconds()),
-		"version":    buildVersion,
+		"status":       map[bool]string{true: "ok", false: "degraded"}[dbOK],
+		"database":     dbOK,
+		"sseClients":   s.hub.Count(),
+		"queuePending": pending,
+		"queueDead":    dead,
+		"poolAcquired": st.AcquiredConns(),
+		"poolIdle":     st.IdleConns(),
+		"poolMax":      st.MaxConns(),
+		"uptimeSec":    int(time.Since(s.startedAt).Seconds()),
+		"version":      buildVersion,
 	})
 }
 

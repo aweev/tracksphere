@@ -59,10 +59,10 @@ function ProfileCard({ user }: { user: User | null }) {
   return (
     <Card title="Profile">
       <dl className="grid gap-2 text-sm md:grid-cols-2">
-        <div><dt className="text-xs uppercase text-slate-400">Name</dt><dd className="font-semibold">{user.name || '—'}</dd></div>
-        <div><dt className="text-xs uppercase text-slate-400">Email</dt><dd className="font-mono">{user.email}</dd></div>
-        <div><dt className="text-xs uppercase text-slate-400">Role</dt><dd className="capitalize">{user.role}</dd></div>
-        <div><dt className="text-xs uppercase text-slate-400">MFA</dt><dd>{user.totpEnabled ? 'Enabled' : 'Disabled'}</dd></div>
+        <div><dt className="text-xs uppercase text-text-muted">Name</dt><dd className="font-semibold">{user.name || '—'}</dd></div>
+        <div><dt className="text-xs uppercase text-text-muted">Email</dt><dd className="font-mono">{user.email}</dd></div>
+        <div><dt className="text-xs uppercase text-text-muted">Role</dt><dd className="capitalize">{user.role}</dd></div>
+        <div><dt className="text-xs uppercase text-text-muted">MFA</dt><dd>{user.totpEnabled ? 'Enabled' : 'Disabled'}</dd></div>
       </dl>
     </Card>
   );
@@ -355,12 +355,12 @@ function BrandingCard() {
   const qc = useQueryClient();
   const { data } = useQuery({
     queryKey: ['branding'],
-    queryFn: async () => (await api.get<{ company: string; color: string; logo: string; support: string }>('/api/v1/branding')).data,
+    queryFn: async () => (await api.get<{ company: string; color: string; logo: string; support: string; customDomain: string }>('/api/v1/branding')).data,
   });
-  const [form, setForm] = useState({ company: '', color: '#ff6b00', logo: '', support: '' });
+  const [form, setForm] = useState({ company: '', color: '#ff6b00', logo: '', support: '', customDomain: '' });
   useEffect(() => {
     if (data) {
-      setForm({ company: data.company ?? '', color: data.color || '#ff6b00', logo: data.logo ?? '', support: data.support ?? '' });
+      setForm({ company: data.company ?? '', color: data.color || '#ff6b00', logo: data.logo ?? '', support: data.support ?? '', customDomain: data.customDomain ?? '' });
     }
   }, [data]);
   const [msg, setMsg] = useState('');
@@ -384,7 +384,15 @@ function BrandingCard() {
         <input value={form.logo} onChange={(e) => setForm({ ...form, logo: e.target.value })}
           placeholder="Logo image URL" aria-label="Logo URL"
           className="rounded-xl border border-slate-300 px-3 py-2 font-mono text-sm" />
+        <input value={form.customDomain} onChange={(e) => setForm({ ...form, customDomain: e.target.value })}
+          placeholder="Custom domain (optional)" aria-label="Custom domain"
+          className="rounded-xl border border-slate-300 px-3 py-2 font-mono text-sm" />
       </div>
+      <p className="mt-2 text-xs text-slate-500">
+        Custom domain: point a CNAME for this hostname at the platform, then customer
+        confirm/unsubscribe links come from your own origin instead of a foreign brand.
+        Bare hostname only — no https://.
+      </p>
       <button type="button" onClick={() => { setMsg(''); save.mutate(); }}
         className="mt-3 rounded-xl bg-navy-950 px-4 py-2 text-sm font-semibold text-white">
         Save brand
@@ -444,7 +452,7 @@ function TeamCard() {
             <div>
               <span className="font-semibold">{m.name || m.email}</span>
               <span className="ml-2 font-mono text-xs text-slate-500">{m.email}</span>
-              <span className="ml-2 text-xs capitalize text-slate-400">{m.role}{m.active ? '' : ' · deactivated'}</span>
+              <span className="ml-2 text-xs capitalize text-text-muted">{m.role}{m.active ? '' : ' · deactivated'}</span>
             </div>
             {m.active ? (
               <button type="button" onClick={() => deactivate.mutate(m.id)}
@@ -500,7 +508,7 @@ function ApiKeysCard() {
             <div>
               <span className="font-semibold">{k.name}</span>
               <span className="ml-2 font-mono text-xs text-slate-500">{k.prefix}…</span>
-              <span className="ml-2 text-xs capitalize text-slate-400">{k.role}{k.revoked ? ' · revoked' : ''}</span>
+              <span className="ml-2 text-xs capitalize text-text-muted">{k.role}{k.revoked ? ' · revoked' : ''}</span>
             </div>
             {!k.revoked ? (
               <button type="button" onClick={() => revoke.mutate(k.id)}
@@ -554,7 +562,7 @@ function WebhooksCard() {
         {(data ?? []).map((w) => (
           <li key={w.id} className="flex flex-wrap items-center justify-between gap-2 py-2.5 text-sm">
             <div className="break-all font-mono text-xs">{w.url}
-              <span className="ml-2 font-sans text-slate-400">{w.events.join(', ')}</span>
+              <span className="ml-2 font-sans text-text-muted">{w.events.join(', ')}</span>
             </div>
             <button type="button" onClick={() => remove.mutate(w.id)}
               className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-600">

@@ -43,7 +43,9 @@ services:
       # App runs as the RESTRICTED role; migrations run as the owner.
       TRACKSPHERE_DATABASE_URL: postgres://tracksphere_app:${APP_DB_PASSWORD:?set APP_DB_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-tracksphere}?sslmode=disable
       TRACKSPHERE_MIGRATIONS_URL: postgres://${POSTGRES_USER:-tracksphere}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-tracksphere}?sslmode=disable
-      TRACKSPHERE_AUTO_MIGRATE: '1'
+      # P1-2 migration freeze: prod never auto-migrates. Run explicitly:
+      #   TRACKSPHERE_MIGRATION_BACKUP_DONE=1 docker compose --profile migrate run --rm migrate
+      TRACKSPHERE_AUTO_MIGRATE: '0'
       TRACKSPHERE_SECRET_KEY: ${TRACKSPHERE_SECRET_KEY:?set TRACKSPHERE_SECRET_KEY in .env}
       TRACKSPHERE_CARRIER_WEBHOOK_SECRET: ${TRACKSPHERE_CARRIER_WEBHOOK_SECRET:?set in .env}
       TRACKSPHERE_LOG_LEVEL: ${TRACKSPHERE_LOG_LEVEL:-info}
@@ -74,6 +76,25 @@ services:
       TRACKSPHERE_CARRIER_WEBHOOK_SECRET: ${TRACKSPHERE_CARRIER_WEBHOOK_SECRET}
       TRACKSPHERE_WORKER_CONCURRENCY: ${TRACKSPHERE_WORKER_CONCURRENCY:-4}
       TRACKSPHERE_LOG_LEVEL: ${TRACKSPHERE_LOG_LEVEL:-info}
+
+  # One-shot schema migration (P1-2). Never runs on boot; the operator
+  # takes a backup first, then: --profile migrate run --rm migrate
+  migrate:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.api
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles: ['migrate']
+    environment:
+      TRACKSPHERE_ENV: ${TRACKSPHERE_ENV:-production}
+      TRACKSPHERE_DATABASE_URL: postgres://${POSTGRES_USER:-tracksphere}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-tracksphere}?sslmode=disable
+      TRACKSPHERE_MIGRATIONS_URL: postgres://${POSTGRES_USER:-tracksphere}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-tracksphere}?sslmode=disable
+      TRACKSPHERE_SECRET_KEY: ${TRACKSPHERE_SECRET_KEY:?set TRACKSPHERE_SECRET_KEY in .env}
+      TRACKSPHERE_CARRIER_WEBHOOK_SECRET: ${TRACKSPHERE_CARRIER_WEBHOOK_SECRET:?set in .env}
+      TRACKSPHERE_MIGRATION_BACKUP_DONE: ${TRACKSPHERE_MIGRATION_BACKUP_DONE:-0}
+    entrypoint: ['/app/migrate']
 
   web:
     build:

@@ -52,7 +52,7 @@ export default function StatusPage() {
           </dl>
         ) : null}
       </div>
-      <p className="mt-4 text-center text-xs text-slate-400">
+      <p className="mt-4 text-center text-xs text-text-muted">
         Refreshes every 30s · queue depth and dead letters included
       </p>
     </div>

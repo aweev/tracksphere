@@ -640,13 +640,13 @@ var SweepStaleAfter = 2 * SweepInterval
 // keys the dispatcher's idempotency: retries of this job share it, a later
 // re-raise gets a new alert row and therefore a new key.
 func enqueueAlertNotify(ctx context.Context, tx pgx.Tx, tenantID, shipmentID, alertID uuid.UUID, severity string, interrupt bool, kind string) error {
-	return queue.EnqueueTxTenant(ctx, tx, &tenantID, "", AlertNotifyJob, map[string]any{
-		"tenantId":   tenantID.String(),
-		"shipmentId": shipmentID.String(),
-		"alertId":    alertID.String(),
-		"severity":   severity,
-		"interrupt":  interrupt,
-		"kind":       kind,
+	return queue.EnqueueTxTenantTyped(ctx, tx, &tenantID, "", AlertNotifyJob, queue.AlertNotifyPayload{
+		TenantID:   tenantID,
+		ShipmentID: shipmentID,
+		AlertID:    alertID,
+		Severity:   severity,
+		Interrupt:  interrupt,
+		Kind:       kind,
 	}, time.Time{})
 }
 
@@ -747,25 +747,67 @@ const sweepBatchSize = 2000
 // pass (15 minutes later) resumes it. Detection delayed, never dropped.
 const sweepMaxWindowsPerTenant = 10
 
-// escalateBreached marks acknowledged, unassigned alerts past their SLA. An
-// unacknowledged alert is NOT escalated: nagging someone who has not even seen
-// it yet is exactly the behaviour that trains a team to ignore the queue.
+// escalateBreached marks acknowledged alerts past their SLA and makes the
+// escalation perceptible: each escalated alert enqueues an ops notification
+// (a second, deliberate page for criticals; digest-routed for warnings so an
+// escalation cannot burn the interrupt budget twice for one alert).
+//
+// An unacknowledged alert is NOT escalated: nagging someone who has not even
+// seen it yet is exactly the behaviour that trains a team to ignore the
+// queue. The escalated_at IS NULL guard makes each breach one-shot — the
+// re-notify happens once per breach, not once per pass.
 func escalateBreached(ctx context.Context, tx pgx.Tx, log *slog.Logger, tenantID uuid.UUID) (int, error) {
-	tag, err := tx.Exec(ctx, `
+	rows, err := tx.Query(ctx, `
 		UPDATE alerts SET escalated_at = now()
 		WHERE tenant_id=$1 AND status='open'
 		  AND due_at IS NOT NULL AND due_at < now()
 		  AND escalated_at IS NULL
 		  AND acknowledged_at IS NOT NULL
-		  AND (snoozed_until IS NULL OR snoozed_until < now())`, tenantID)
+		  AND (snoozed_until IS NULL OR snoozed_until < now())
+		RETURNING id, shipment_id, severity`, tenantID)
 	if err != nil {
 		return 0, err
 	}
-	n := int(tag.RowsAffected())
-	if n > 0 {
-		log.Info("exceptions escalated", "tenant", tenantID, "count", n)
+	type breached struct {
+		id, shipment uuid.UUID
+		severity     string
 	}
-	return n, nil
+	var breaches []breached
+	for rows.Next() {
+		var b breached
+		if err := rows.Scan(&b.id, &b.shipment, &b.severity); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		breaches = append(breaches, b)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	for _, b := range breaches {
+		// The dispatcher keys its send-idempotency on the payload alert
+		// id: the "-esc" suffix distinguishes the escalation page from the
+		// raise-time notification, or the raise-time dedupe claim would
+		// silently swallow the escalation email. Queue-level dedup key
+		// keeps a retry of this pass from double-paging.
+		if err := queue.EnqueueTxTenantTyped(ctx, tx, &tenantID, "esc:"+b.id.String(),
+			AlertNotifyJob, queue.AlertNotifyPayload{
+				TenantID:   tenantID,
+				ShipmentID: b.shipment,
+				AlertID:    b.id,
+				AlertKey:   b.id.String() + "-esc",
+				Severity:   b.severity,
+				Interrupt:  b.severity == "critical",
+				Kind:       "sla_escalation",
+			}, time.Time{}); err != nil {
+			return len(breaches), err
+		}
+	}
+	if len(breaches) > 0 {
+		log.Info("exceptions escalated", "tenant", tenantID, "count", len(breaches))
+	}
+	return len(breaches), nil
 }
 
 // sweepableTenants lists every tenant.

@@ -194,8 +194,8 @@ func EnqueueDigests(ctx context.Context, pool *pgxpool.Pool) (int, error) {
 	}
 	for _, id := range ids {
 		tenantID := id
-		if err := queue.EnqueueTxTenant(ctx, tx, &tenantID, "weekly:"+id.String()+":"+week,
-			ReportWeeklyJob, map[string]any{"tenantId": id.String()}, time.Time{}); err != nil {
+		if err := queue.EnqueueTxTenantTyped(ctx, tx, &tenantID, "weekly:"+id.String()+":"+week,
+			ReportWeeklyJob, queue.TenantOnlyPayload{TenantID: id}, time.Time{}); err != nil {
 			return 0, err
 		}
 	}
@@ -236,8 +236,8 @@ func EnqueueDailyReports(ctx context.Context, pool *pgxpool.Pool) (int, error) {
 	}
 	for _, id := range ids {
 		tenantID := id
-		if err := queue.EnqueueTxTenant(ctx, tx, &tenantID, "daily:"+id.String()+":"+day,
-			ReportDailyJob, map[string]any{"tenantId": id.String()}, time.Time{}); err != nil {
+		if err := queue.EnqueueTxTenantTyped(ctx, tx, &tenantID, "daily:"+id.String()+":"+day,
+			ReportDailyJob, queue.TenantOnlyPayload{TenantID: id}, time.Time{}); err != nil {
 			return 0, err
 		}
 	}

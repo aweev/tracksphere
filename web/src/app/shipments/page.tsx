@@ -52,7 +52,7 @@ const EMPTY_BREAKDOWN: RiskBreakdown = {
 export default function ShipmentsPage() {
   return (
     <RequireAuth>
-      <Suspense fallback={<div className="p-8 text-slate-400" aria-busy="true">Loading…</div>}>
+      <Suspense fallback={<div className="p-8 text-text-muted" aria-busy="true">Loading…</div>}>
         <ShipmentsBody />
       </Suspense>
     </RequireAuth>
@@ -362,7 +362,7 @@ function ShipmentsBody() {
                         >
                           {s.trackingNumber}
                         </Link>
-                        {s.reference && <div className="text-xs text-slate-400">{s.reference}</div>}
+                        {s.reference && <div className="text-xs text-text-muted">{s.reference}</div>}
                       </div>
 <RiskTooltip
   score={s.riskScore ?? 0}

@@ -131,6 +131,12 @@ func (s *Server) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "forbidden", "Cannot mint a key above your role")
 		return
 	}
+	// API key quota (429): revoking a key frees the slot.
+	if s.overCountQuota(r.Context(), me.TenantID, s.tenantPlan(r.Context(), me.TenantID), "apiKeys") {
+		writeError(w, http.StatusTooManyRequests, "quota_exceeded",
+			"API key limit reached for your plan — revoke an unused key or upgrade. Usage is shown on /billing.")
+		return
+	}
 	raw, hash, prefix, err := newAPIKey()
 	if err != nil {
 		s.domainError(w, err)

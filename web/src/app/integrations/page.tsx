@@ -90,7 +90,7 @@ function CarriersCard() {
               <div>
                 <span className="font-semibold capitalize">{c.carrier}</span>
                 <span className="ml-2 font-mono text-xs text-slate-500">{c.baseUrl || '(no URL)'}</span>
-                <span className="ml-2 text-xs text-slate-400">
+                <span className="ml-2 text-xs text-text-muted">
                   every {c.pollMinutes}m{c.lastPolledAt ? ` · polled ${new Date(c.lastPolledAt).toLocaleString()}` : ' · never polled'}
                 </span>
                 {c.lastError ? <div className="text-xs text-red-600">{c.lastError}</div> : null}

@@ -78,6 +78,14 @@ func (s *Server) handleInvite(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "forbidden", "Only owners can invite admins")
 		return
 	}
+	// Seat quota (429 + upgrade pointer). Enforced here, at the invite door:
+	// deactivating a seat frees the slot, so "deactivate a teammate first" is
+	// real advice, not marketing.
+	if s.overCountQuota(r.Context(), me.TenantID, s.tenantPlan(r.Context(), me.TenantID), "seats") {
+		writeError(w, http.StatusTooManyRequests, "quota_exceeded",
+			"Seat limit reached for your plan — deactivate a teammate or upgrade. Usage is shown on /billing.")
+		return
+	}
 	// One-time password, shown once.
 	b := make([]byte, 12)
 	if _, err := rand.Read(b); err != nil {

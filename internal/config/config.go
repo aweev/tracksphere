@@ -168,6 +168,13 @@ func Load() (*Config, error) {
 	default:
 		return nil, fmt.Errorf("TRACKSPHERE_ENV must be local|development|production, got %q", cfg.Env)
 	}
+	// Migration freeze (P1-2): production boots must never auto-migrate.
+	// Schema changes ship via `make migrate` / cmd/migrate with a backup
+	// first; an auto-migrating prod API turns a bad migration into downtime
+	// on every replica at once. Fail closed with an actionable error.
+	if cfg.Env == "production" && cfg.AutoMigrate {
+		return nil, fmt.Errorf("TRACKSPHERE_AUTO_MIGRATE must be 0 in production (run migrations explicitly with a backup first)")
+	}
 	return cfg, nil
 }
 

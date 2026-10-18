@@ -174,6 +174,7 @@ func HandleAlertNotify(pool *pgxpool.Pool, log *slog.Logger) func(context.Contex
 			TenantID   string `json:"tenantId"`
 			ShipmentID string `json:"shipmentId"`
 			AlertID    string `json:"alertId"`
+			AlertKey   string `json:"alertKey"`
 			Severity   string `json:"severity"`
 			Interrupt  bool   `json:"interrupt"`
 			Kind       string `json:"kind"`
@@ -191,7 +192,13 @@ func HandleAlertNotify(pool *pgxpool.Pool, log *slog.Logger) func(context.Contex
 		}
 		// alertId keys idempotency; jobs enqueued before it existed fall back
 		// to the message text (same retry semantics, coarser grain).
+		// alertKey (e.g. "…-esc" for an SLA-escalation page) overrides it so
+		// a second notification about the same alert keeps its own dedupe
+		// claim instead of collapsing into the raise-time one.
 		alertID := strings.ReplaceAll(p.AlertID, "-", "")
+		if p.AlertKey != "" {
+			alertID = p.AlertKey
+		}
 
 		var sends []pendingSend
 		var shipped int
@@ -242,6 +249,12 @@ func HandleAlertNotify(pool *pgxpool.Pool, log *slog.Logger) func(context.Contex
 
 			subject := fmt.Sprintf("[%s] %s — %s", severity, tracking, title)
 			bodyText := fmt.Sprintf("%s\n\nShipment: %s\n%s", message, tracking, dashboardURL(tenantID, shipmentID))
+			// An escalation page must read differently from the raise-time
+			// notification: same subject invites "seen that" dismissal.
+			if p.Kind == "sla_escalation" {
+				subject = fmt.Sprintf("[SLA breached] %s — %s", tracking, title)
+				bodyText += "\n\nThis exception is past its response SLA and still open. Escalate with the carrier or re-plan with the customer."
+			}
 
 			for _, t := range targets {
 				rhash := recipientHash(t.email)

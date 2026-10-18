@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import type { ShipmentStatus } from '@/lib/api';
+import { CountUp } from '@/components/CountUp';
 
 const labels: Record<ShipmentStatus, string> = {
   booked: 'Booked',
@@ -14,11 +15,22 @@ const labels: Record<ShipmentStatus, string> = {
 export function StatusPill({ status }: { status: ShipmentStatus }) {
   return (
     <span className={`status-pill status-${status}`}>
-      <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70" aria-hidden="true" />
+      <span className="h-1.5 w-1.5 rounded-full bg-current opacity-100" aria-hidden="true" />
       {labels[status]}
     </span>
   );
 }
+
+// Risk shape is never color-only (WCAG 1.4.1): each tier carries a distinct
+// glyph + text label, so meaning survives monochrome / color-blindness.
+// Heuristic: shape redundancy calibrates trust — operators act on the badge
+// without re-reading the row (Hick: one glance, one decision).
+const riskGlyph: Record<'critical' | 'at_risk' | 'watch' | 'clear', string> = {
+  critical: '▲',
+  at_risk: '◆',
+  watch: '●',
+  clear: '✓',
+};
 
 export function RiskBadge({
   tier,
@@ -29,8 +41,9 @@ export function RiskBadge({
 }) {
   return (
     <span className={`risk-badge risk-${tier}`} aria-label={`Risk ${tier.replace('_', ' ')} ${score ? `score ${score}` : ''}`}>
-      {tier.replace('_', ' ')}
-      {score !== undefined ? ` · ${score}` : ''}
+      <span aria-hidden="true">{riskGlyph[tier]}</span>
+      {' '}{tier.replace('_', ' ')}
+      {score !== undefined ? <> · <CountUp value={score} /></> : ''}
     </span>
   );
 }
@@ -70,9 +83,9 @@ export function StatTile({
 }) {
   const tones = {
     default: 'text-navy-950',
-    accent: 'text-accent-500',
-    danger: 'text-red-600',
-    success: 'text-emerald-600',
+    accent: 'text-accent-700',
+    danger: 'text-risk-critical',
+    success: 'text-risk-clear',
   };
   const body = (
     <>

@@ -456,7 +456,10 @@ export const authApi = {
       method: 'PATCH',
       body: JSON.stringify({ theme }),
     }),
-  resolveAlert: (id: string, body?: { rootCause?: AlertRootCause; note?: string }) =>
+  resolveAlert: (
+    id: string,
+    body?: { rootCause?: AlertRootCause; note?: string; resolution?: string },
+  ) =>
     request<{ ok: boolean }>(`/api/v1/alerts/${id}/resolve`, {
       method: 'POST',
       body: JSON.stringify(body ?? {}),

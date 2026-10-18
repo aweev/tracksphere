@@ -147,7 +147,7 @@ function DigestCard() {
   if (!data) return null;
   return (
     <Card title="This week" action={
-      <span className="text-xs text-slate-400">auto-emailed to owners Mondays</span>
+      <span className="text-xs text-text-muted">auto-emailed to owners Mondays</span>
     }>
 <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm">
         <span><strong className="font-extrabold">{data.delivered}</strong> delivered</span>

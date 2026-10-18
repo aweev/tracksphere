@@ -16,7 +16,7 @@ export function RequireAuth({ children }: { children: ReactNode }) {
 
   if (loading || !user) {
     return (
-      <div className="flex h-full items-center justify-center text-slate-400">Loading…</div>
+      <div className="flex h-full items-center justify-center text-text-muted">Loading…</div>
     );
   }
   return <Shell>{children}</Shell>;

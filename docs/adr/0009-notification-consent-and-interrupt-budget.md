@@ -70,7 +70,11 @@ the volume was going up while the controls were unbuilt.
 
 10. **Escalation requires acknowledgement.** An unacknowledged alert past its SLA
     is not escalated. Nagging someone who has not seen it yet is the behaviour
-    that trains a team to ignore the queue.
+    that trains a team to ignore the queue. Once acknowledged, a breach enqueues
+    ONE escalation notification ("SLA breached" page) — criticals may interrupt,
+    everything else routes to the digest — so escalation counts against the same
+    budget as every other notification. The `escalated_at` stamp is one-shot per
+    breach; a repeat page requires a new breach (e.g. a re-snooze that expires).
 
 `DecideRoute` is a pure function and the whole policy is unit-tested, including
 the midnight-wrapping quiet window and the zero-cap case.

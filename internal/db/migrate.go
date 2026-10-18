@@ -5,6 +5,7 @@ import (
 	"embed"
 	"fmt"
 	"io/fs"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,6 +22,12 @@ const migrationLockID int64 = 0x5452414b535048 // "TRACKSPH"
 // once each, under a Postgres advisory lock so concurrent api/worker boots
 // cannot race. Migrations are plain SQL files named 000001_description.sql.
 func Migrate(ctx context.Context, migrationsURL string) error {
+	// Pre-migration backup gate: in production the operator must prove a
+	// fresh backup exists (pg_dump/pgBackRest off-host) before the schema
+	// moves. Local/dev skip so `make migrate` stays frictionless.
+	if os.Getenv("TRACKSPHERE_ENV") == "production" && os.Getenv("TRACKSPHERE_MIGRATION_BACKUP_DONE") != "1" {
+		return fmt.Errorf("refusing production migration: set TRACKSPHERE_MIGRATION_BACKUP_DONE=1 after verifying a fresh backup (see docs/RUNBOOK_RESTORE.md)")
+	}
 	pool, err := Open(ctx, migrationsURL, 4, 1)
 	if err != nil {
 		return err

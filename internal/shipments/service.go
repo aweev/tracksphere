@@ -191,22 +191,22 @@ func (s *Service) IngestEvent(ctx context.Context, carrier string, ev *model.Car
 		}
 
 		// 4. Outbox: same transaction as the data.
-		jobPayload := map[string]any{
-			"shipmentId": shipmentID.String(),
-			"tenantId":   tenantID.String(),
-			"eventId":    eventID.String(),
-			"code":       ev.Code,
-			"status":     newStatus,
-			"stale":      stale,
+		jobPayload := queue.EvaluateRulesPayload{
+			ShipmentID: shipmentID,
+			TenantID:   tenantID,
+			EventID:    eventID,
+			Code:       ev.Code,
+			Status:     newStatus,
+			Stale:      stale,
 		}
-		if err := queue.EnqueueTxTenant(ctx, tx, &tenantID, "", JobEvaluateRules, jobPayload, time.Time{}); err != nil {
+		if err := queue.EnqueueTxTenantTyped(ctx, tx, &tenantID, "", JobEvaluateRules, jobPayload, time.Time{}); err != nil {
 			return err
 		}
-		if err := queue.EnqueueTxTenant(ctx, tx, &tenantID, "", JobNotifyShipment, jobPayload, time.Time{}); err != nil {
+		if err := queue.EnqueueTxTenantTyped(ctx, tx, &tenantID, "", JobNotifyShipment, jobPayload, time.Time{}); err != nil {
 			return err
 		}
 		if ev.ETA != nil {
-			if err := queue.EnqueueTxTenant(ctx, tx, &tenantID, "", JobRecalculateETA, jobPayload, time.Time{}); err != nil {
+			if err := queue.EnqueueTxTenantTyped(ctx, tx, &tenantID, "", JobRecalculateETA, jobPayload, time.Time{}); err != nil {
 				return err
 			}
 		}
@@ -265,11 +265,11 @@ func enqueueWebhookFanout(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID, ev
 		if !subscribed {
 			continue
 		}
-		if err := queue.EnqueueTxTenant(ctx, tx, &tenantID, "", "webhook.dispatch", map[string]any{
-			"endpointId": id.String(),
-			"tenantId":   tenantID.String(),
-			"eventType":  eventType,
-			"payload":    data,
+		if err := queue.EnqueueTxTenantTyped(ctx, tx, &tenantID, "", "webhook.dispatch", queue.WebhookDispatchPayload{
+			EndpointID: id,
+			TenantID:   tenantID,
+			EventType:  eventType,
+			Payload:    data,
 		}, time.Time{}); err != nil {
 			return err
 		}
@@ -316,15 +316,16 @@ func (s *Service) NotifyCustomer(ctx context.Context, tenantID, shipmentID uuid.
 	}
 
 	// Queue a customer notification job
-	jobPayload := map[string]any{
-		"shipmentId":  shipmentID.String(),
-		"tenantId":    tenantID.String(),
-		"title":       title,
-		"message":     message,
-		"customerMsg": customerMsg,
-		"isCustom":    true,
+	jobPayload := queue.NotifyCustomerPayload{
+		ShipmentID:  shipmentID,
+		TenantID:    tenantID,
+		Title:       title,
+		Message:     message,
+		CustomerMsg: customerMsg,
+		IsCustom:    true,
+		Nonce:       uuid.NewString(),
 	}
-	return s.queue.EnqueueTenant(ctx, tenantID, "shipment.notify_customer", jobPayload, time.Time{})
+	return queue.EnqueueTenantTyped(s.queue, ctx, tenantID, "shipment.notify_customer", jobPayload, time.Time{})
 }
 
 // EmailCarrier queues an email to the carrier for a shipment.

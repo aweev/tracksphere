@@ -9,6 +9,7 @@ import { api, type Alert, type DashboardStats, type RiskBreakdown, type Shipment
 import { EtaBadge } from '@/components/EtaBadge';
 import { RiskTooltip } from '@/components/RiskTooltip';
 import { OnboardingChecklist } from '@/components/OnboardingChecklist';
+import { CountUp } from '@/components/CountUp';
 
 // maplibre-gl is ~150 kB and touches `window` at import. Loading it eagerly
 // put the whole library in the dashboard's first-load JS for every user,
@@ -17,7 +18,7 @@ import { OnboardingChecklist } from '@/components/OnboardingChecklist';
 const FleetMap = dynamic(() => import('@/components/FleetMap'), {
   ssr: false,
   loading: () => (
-    <div className="flex h-64 items-center justify-center rounded-2xl bg-slate-50 text-sm text-slate-400">
+    <div className="flex h-64 items-center justify-center rounded-2xl bg-slate-50 text-sm text-text-muted">
       Loading fleet map…
     </div>
   ),
@@ -206,7 +207,7 @@ function DashboardBody() {
                                   title="Why this risk? Open the score breakdown."
                                 >
                                   {RISK_LABELS[tier]}
-                                  {s.riskScore ? ` · ${s.riskScore}` : ''}
+                                  {s.riskScore ? <> · <CountUp value={s.riskScore} /></> : ''}
                                 </span>
                               </RiskTooltip>
                             ) : null}

@@ -23,6 +23,40 @@ type brandView struct {
 	Color   string `json:"color"`
 	Logo    string `json:"logo"`
 	Support string `json:"support"`
+	// CustomDomain is the tenant's branded origin for customer-facing links
+	// (confirm/unsubscribe). One-click carrier emails already brand themselves
+	// from this column; the public API was silent about it, so an admin could
+	// never set one — the white-label promise stopped at the email header.
+	CustomDomain string `json:"customDomain"`
+}
+
+// normalizeCustomDomain accepts a bare hostname only. A stored URL with a
+// scheme or path would corrupt links ("https://x/y/track/..." plus one more
+// origin) and invite header confusion; the browser-facing hostname is the
+// only thing this field can honestly mean.
+func normalizeCustomDomain(s string) (string, error) {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if s == "" {
+		return "", nil
+	}
+	if strings.ContainsAny(s, " /\\?#") || strings.Contains(s, "://") {
+		return "", errors.New("custom domain must be a bare hostname like portal.example.com")
+	}
+	if len(s) < 5 || len(s) > 253 || !strings.Contains(s, ".") ||
+		strings.HasPrefix(s, ".") || strings.HasSuffix(s, ".") ||
+		strings.HasPrefix(s, "-") || strings.HasSuffix(s, "-") ||
+		strings.Contains(s, "..") {
+		return "", errors.New("custom domain must be a bare hostname like portal.example.com")
+	}
+	// Accept the legal hostname shape: letters/digits/hyphens/dots.
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-', r == '.':
+		default:
+			return "", errors.New("custom domain must be a bare hostname like portal.example.com")
+		}
+	}
+	return s, nil
 }
 
 func (s *Server) brandFor(ctx context.Context, tenantID string) brandView {
@@ -36,9 +70,9 @@ func (s *Server) brandFor(ctx context.Context, tenantID string) brandView {
 		return b
 	}
 	_ = tx.QueryRow(ctx, `
-		SELECT company_name, primary_color, logo_url, support_email
+		SELECT company_name, primary_color, logo_url, support_email, custom_domain
 		FROM tenant_branding WHERE tenant_id=$1`, tenantID).
-		Scan(&b.Company, &b.Color, &b.Logo, &b.Support)
+		Scan(&b.Company, &b.Color, &b.Logo, &b.Support, &b.CustomDomain)
 	if b.Color == "" {
 		b.Color = "#ff6b00"
 	}
@@ -53,9 +87,9 @@ func (s *Server) handleGetBranding(w http.ResponseWriter, r *http.Request) {
 	var updated time.Time
 	err := db.WithTenant(r.Context(), s.pool, user.TenantID, func(tx pgx.Tx) error {
 		return tx.QueryRow(r.Context(), `
-			SELECT company_name, primary_color, logo_url, support_email, updated_at
+			SELECT company_name, primary_color, logo_url, support_email, custom_domain, updated_at
 			FROM tenant_branding WHERE tenant_id=$1`, user.TenantID).
-			Scan(&b.Company, &b.Color, &b.Logo, &b.Support, &updated)
+			Scan(&b.Company, &b.Color, &b.Logo, &b.Support, &b.CustomDomain, &updated)
 	})
 	if err != nil {
 		b = brandView{Color: "#ff6b00"}
@@ -64,10 +98,11 @@ func (s *Server) handleGetBranding(w http.ResponseWriter, r *http.Request) {
 }
 
 type brandInput struct {
-	Company string `json:"company"`
-	Color   string `json:"color"`
-	Logo    string `json:"logo"`
-	Support string `json:"support"`
+	Company      string `json:"company"`
+	Color        string `json:"color"`
+	Logo         string `json:"logo"`
+	Support      string `json:"support"`
+	CustomDomain string `json:"customDomain"`
 }
 
 // handleUpdateBranding PUT /api/v1/branding (admin+)
@@ -84,16 +119,22 @@ func (s *Server) handleUpdateBranding(w http.ResponseWriter, r *http.Request) {
 	if color == "" {
 		color = "#ff6b00"
 	}
+	domain, err := normalizeCustomDomain(in.CustomDomain)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_input", err.Error())
+		return
+	}
 	user := currentUser(r)
-	err := db.WithTenant(r.Context(), s.pool, user.TenantID, func(tx pgx.Tx) error {
+	err = db.WithTenant(r.Context(), s.pool, user.TenantID, func(tx pgx.Tx) error {
 		_, err := tx.Exec(r.Context(), `
-			INSERT INTO tenant_branding (tenant_id, company_name, primary_color, logo_url, support_email, updated_at)
-			VALUES ($1,$2,$3,$4,$5,now())
+			INSERT INTO tenant_branding (tenant_id, company_name, primary_color, logo_url, support_email, custom_domain, updated_at)
+			VALUES ($1,$2,$3,$4,$5,$6,now())
 			ON CONFLICT (tenant_id) DO UPDATE SET
 				company_name=EXCLUDED.company_name, primary_color=EXCLUDED.primary_color,
-				logo_url=EXCLUDED.logo_url, support_email=EXCLUDED.support_email, updated_at=now()`,
+				logo_url=EXCLUDED.logo_url, support_email=EXCLUDED.support_email,
+				custom_domain=EXCLUDED.custom_domain, updated_at=now()`,
 			user.TenantID, strings.TrimSpace(in.Company), color,
-			strings.TrimSpace(in.Logo), strings.TrimSpace(in.Support))
+			strings.TrimSpace(in.Logo), strings.TrimSpace(in.Support), domain)
 		return err
 	})
 	if err != nil {
@@ -103,6 +144,7 @@ func (s *Server) handleUpdateBranding(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, brandView{
 		Company: strings.TrimSpace(in.Company), Color: color,
 		Logo: strings.TrimSpace(in.Logo), Support: strings.TrimSpace(in.Support),
+		CustomDomain: domain,
 	})
 }
 
@@ -171,6 +213,12 @@ func (s *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 		status    string
 		duplicate bool
 		tenantID  uuid.UUID
+		// confirmLink is collected inside the transaction but the actual
+		// provider send happens AFTER commit: no transaction spans network
+		// I/O — a tx hold on a remote SMTP send is how every other request
+		// in the pool starves.
+		confirmLink string
+		confirmBody string
 	}
 	var res result
 
@@ -260,42 +308,56 @@ func (s *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 		s.consentAudit(r, tx, tenantID, &ship.ID, channel, recipient, rhash,
 			"requested", "", ipHash)
 
-		// Metered channels: send the confirmation out-of-band now.
+		// Metered channels: collect the confirmation for out-of-band send
+		// after commit. The origin is the tenant's own white-label domain
+		// when it has one — the customer must never see a foreign brand on
+		// the consent link; consent is the trust moment.
 		if res.status == "pending" && token != nil && !res.duplicate {
+			base := s.publicBaseURL(r)
+			if brand, err := brandForTenantRow(r.Context(), tx, tenantID); err == nil && brand.CustomDomain != "" {
+				base = "https://" + brand.CustomDomain
+			}
 			link := fmt.Sprintf("%s/track/%s/subscribe/confirm?token=%s",
-				s.publicBaseURL(r), url.PathEscape(tracking), *token)
-			body := fmt.Sprintf(
+				base, url.PathEscape(tracking), *token)
+			res.confirmLink = link
+			res.confirmBody = fmt.Sprintf(
 				"Confirm tracking updates for %s\n\n%s\n\n"+
 					"If you did not request this, ignore this message and nothing will be sent.",
 				tracking, link)
-			sender := notify.ForChannel(s.log, channel)
-			if err := sender.Send(r.Context(), channel, recipient,
-				"Confirm tracking updates", body); err != nil {
-				s.log.Warn("subscribe confirmation send failed",
-					"channel", channel, "err", err)
-			}
 		}
 		return nil
 	})
-	if err != nil {
-		switch {
-		case errors.Is(err, errSubscribeCap):
-			writeError(w, http.StatusTooManyRequests, "subscribe_limit",
-				"This shipment has reached its subscriber limit")
-			return
-		case errors.Is(err, errSubscribeRevoked):
-			writeError(w, http.StatusGone, "subscribe_revoked",
-				"Updates for this address were previously declined")
-			return
-		case errors.Is(err, errSubscribeDisabled):
-			// 409, not 400: the request is well-formed, the operator has the
-			// channel switched off. The portal offers email instead.
-			writeError(w, http.StatusConflict, "channel_disabled",
-				"Updates over this channel are not enabled by the operator — choose email")
-			return
-		default:
-			s.domainError(w, err)
-			return
+	switch err {
+	case nil:
+	case errSubscribeCap:
+		writeError(w, http.StatusTooManyRequests, "subscribe_limit",
+			"This shipment has reached its subscriber limit")
+		return
+	case errSubscribeRevoked:
+		writeError(w, http.StatusGone, "subscribe_revoked",
+			"Updates for this address were previously declined")
+		return
+	case errSubscribeDisabled:
+		// 409, not 400: the request is well-formed, the operator has the
+		// channel switched off. The portal offers email instead.
+		writeError(w, http.StatusConflict, "channel_disabled",
+			"Updates over this channel are not enabled by the operator — choose email")
+		return
+	default:
+		s.domainError(w, err)
+		return
+	}
+
+	// Post-commit: the provider send lives OUTSIDE the transaction. A tx
+	// holding an SMTP socket open blocks connection pool checkout for every
+	// concurrent request — this is the invariant the alert dispatcher
+	// already follows.
+	if res.confirmBody != "" {
+		sender := notify.ForChannel(s.log, channel)
+		if err := sender.Send(r.Context(), channel, recipient,
+			"Confirm tracking updates", res.confirmBody); err != nil {
+			s.log.Warn("subscribe confirmation send failed",
+				"channel", channel, "err", err)
 		}
 	}
 
@@ -309,6 +371,20 @@ func (s *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 		"channel": channel,
 		"message": confirmMessage(res.status),
 	})
+}
+
+// brandForTenantRow reads the branding row inside an already tenant-pinned
+// transaction. Best-effort callers treat its error as "keep the default".
+func brandForTenantRow(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID) (brandView, error) {
+	var b brandView
+	err := tx.QueryRow(ctx, `
+		SELECT company_name, primary_color, logo_url, support_email, custom_domain
+		FROM tenant_branding WHERE tenant_id=$1`, tenantID).
+		Scan(&b.Company, &b.Color, &b.Logo, &b.Support, &b.CustomDomain)
+	if b.Color == "" {
+		b.Color = "#ff6b00"
+	}
+	return b, err
 }
 
 func confirmMessage(status string) string {

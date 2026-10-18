@@ -12,13 +12,14 @@ import { relativeTime } from '@/lib/format';
 import { useTrackedStream } from '@/lib/live';
 import { EtaBadge } from '@/components/EtaBadge';
 import { ConnectionDot, type ConnState } from '@/components/ConnectionDot';
+import { CountUp } from '@/components/CountUp';
 import { RiskTooltip } from '@/components/RiskTooltip';
 
 // MapLibre touches window at import → client-only, no SSR.
 const ShipmentMap = dynamic(() => import('@/components/ShipmentMap'), {
   ssr: false,
   loading: () => (
-    <div className="flex h-72 items-center justify-center rounded-2xl bg-slate-100 text-sm text-slate-400">
+    <div className="flex h-72 items-center justify-center rounded-2xl bg-slate-100 text-sm text-text-muted">
       Loading map…
     </div>
   ),
@@ -77,7 +78,7 @@ function ShipmentDetailBody({ id }: { id: string }) {
       </div>
     );
   }
-  if (!shipment) return <div className="p-8 text-slate-400">Loading…</div>;
+  if (!shipment) return <div className="p-8 text-text-muted">Loading…</div>;
   const points = mapPoints(events ?? []);
 
   const publicUrl =
@@ -123,7 +124,7 @@ function ShipmentDetailBody({ id }: { id: string }) {
             {shipment.origin} → {shipment.destination} · {shipment.carrier} · {shipment.mode}
             {shipment.reference ? ` · ${shipment.reference}` : ''}
           </p>
-          <p className="mt-1 font-mono text-xs text-slate-400">
+          <p className="mt-1 font-mono text-xs text-text-muted">
             updated {relativeTime(shipment.updatedAt)} · {(events ?? []).length} checkpoints
           </p>
         </div>
@@ -147,7 +148,7 @@ function ShipmentDetailBody({ id }: { id: string }) {
                 className="inline-block cursor-help rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-navy-950 underline decoration-dotted underline-offset-2"
                 title="Why this risk? Open the score breakdown."
               >
-                Risk {shipment.riskScore}/100
+                Risk <CountUp value={shipment.riskScore} />/100
               </span>
             </RiskTooltip>
           ) : null}
@@ -284,7 +285,7 @@ function LegsCard({ shipmentId }: { shipmentId: string }) {  const qc = useQuery
           {(legs ?? []).map((l, i) => (
             <li key={l.id} className="flex items-center justify-between gap-2 text-sm">
               <span>
-                <span className="font-mono text-xs text-slate-400">{i + 1}.</span>{' '}
+                <span className="font-mono text-xs text-text-muted">{i + 1}.</span>{' '}
                 <span className="font-semibold">{l.origin || '?'} → {l.destination || '?'}</span>
                 <span className="ml-1 text-xs capitalize text-slate-500">{l.carrier} · {l.mode} · {l.status.replace('_', ' ')}</span>
               </span>
@@ -367,7 +368,7 @@ function DocumentsCard({ shipmentId }: { shipmentId: string }) {
       </label>
       {error ? <p role="alert" className="mb-2 text-xs text-red-600">{error}</p> : null}
       {(docs ?? []).length === 0 ? (
-        <p className="text-xs text-slate-400">No documents yet.</p>
+        <p className="text-xs text-text-muted">No documents yet.</p>
       ) : (
         <ul className="space-y-1.5">
           {(docs ?? []).map((d) => (

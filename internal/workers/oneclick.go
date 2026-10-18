@@ -289,26 +289,16 @@ func HandleEmailCarrier(q *queue.Queue, log *slog.Logger) func(context.Context, 
 // mints a nonce so the worker's idempotency key distinguishes two operator
 // clicks (both deliver) from two attempts of one job (one delivers).
 func EnqueueNotifyCustomer(q *queue.Queue, ctx context.Context, tenantID, shipmentID uuid.UUID, title, message, customerMsg string) error {
-	return q.EnqueueTenant(ctx, tenantID, NotifyCustomerJob, map[string]any{
-		"shipmentId":  shipmentID.String(),
-		"tenantId":    tenantID.String(),
-		"title":       title,
-		"message":     message,
-		"customerMsg": customerMsg,
-		"isCustom":    true,
-		"nonce":       uuid.NewString(),
+	return queue.EnqueueTenantTyped(q, ctx, tenantID, NotifyCustomerJob, queue.NotifyCustomerPayload{
+		ShipmentID: shipmentID, TenantID: tenantID, Title: title, Message: message,
+		CustomerMsg: customerMsg, IsCustom: true, Nonce: uuid.NewString(),
 	}, time.Time{})
 }
 
 // EnqueueEmailCarrier queues a carrier email (nonce: see above).
 func EnqueueEmailCarrier(q *queue.Queue, ctx context.Context, tenantID, shipmentID uuid.UUID, title, message, note, to string) error {
-	return q.EnqueueTenant(ctx, tenantID, EmailCarrierJob, map[string]any{
-		"shipmentId": shipmentID.String(),
-		"tenantId":   tenantID.String(),
-		"title":      title,
-		"message":    message,
-		"note":       note,
-		"to":         to,
-		"nonce":      uuid.NewString(),
+	return queue.EnqueueTenantTyped(q, ctx, tenantID, EmailCarrierJob, queue.EmailCarrierPayload{
+		ShipmentID: shipmentID, TenantID: tenantID, Title: title, Message: message,
+		Note: note, To: to, Nonce: uuid.NewString(),
 	}, time.Time{})
 }

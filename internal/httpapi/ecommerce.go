@@ -1,11 +1,13 @@
 package httpapi
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -249,12 +251,14 @@ func (s *Server) handleCommerceOrder(w http.ResponseWriter, r *http.Request) {
 
 	// Minimal order shape. Unknown shapes → 400.
 	var order struct {
-		ID           any `json:"id"`
+		ID           any    `json:"id"`
+		Email        string `json:"email"` // customer email → auto-subscription
 		Fulfillments []struct {
 			TrackingNumber  string `json:"tracking_number"`
 			TrackingCompany string `json:"tracking_company"`
 		} `json:"fulfillments"`
 		ShippingAddress *struct {
+			Name    string `json:"name"`
 			City    string `json:"city"`
 			Country string `json:"country"`
 		} `json:"shipping_address"`
@@ -267,12 +271,21 @@ func (s *Server) handleCommerceOrder(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_event", "Order has no fulfillments with tracking")
 		return
 	}
+	// Destination joins only the parts we were given: "<city>, <country>" with
+	// a missing city previously rendered a leading ", " — cosmetic, but the
+	// customer sees it verbatim in every update message.
 	dest := ""
 	if order.ShippingAddress != nil {
-		dest = strings.TrimSpace(order.ShippingAddress.City + ", " + order.ShippingAddress.Country)
+		parts := make([]string, 0, 2)
+		for _, p := range []string{order.ShippingAddress.City, order.ShippingAddress.Country} {
+			if p = strings.TrimSpace(p); p != "" {
+				parts = append(parts, p)
+			}
+		}
+		dest = strings.Join(parts, ", ")
 	}
 
-	created, skipped := 0, 0
+	created, skipped, subscribed := 0, 0, 0
 	for _, f := range order.Fulfillments {
 		tracking := strings.TrimSpace(f.TrackingNumber)
 		if tracking == "" {
@@ -280,33 +293,123 @@ func (s *Server) handleCommerceOrder(w http.ResponseWriter, r *http.Request) {
 		}
 		carrier := strings.ToLower(strings.TrimSpace(f.TrackingCompany))
 		if carrier == "" {
-			carrier = provider
+			// No tracking company in the fulfillment: detection later by
+			// providers.DetectCarrier is better than a lie. "unknown" is an
+			// honest placeholder — writing the literal provider slug made the
+			// carrier scorecard report a "shopify" carrier.
+			carrier = "unknown"
 		}
 		// Reference carries the order id so the operator can trace the shipment
-		// back to the sale.
+		// back to the sale. Shopify ids are numeric OR string depending on API
+		// version; fmt.Sprint handles both (a type assert dropped numbers and
+		// silently degraded the reference to "order").
 		ref := "order"
 		if order.ID != nil {
-			if s, ok := order.ID.(string); ok && s != "" {
-				ref = "order " + s
+			switch v := order.ID.(type) {
+			case string:
+				if v != "" {
+					ref = "order " + v
+				}
+			case float64:
+				if v > 0 {
+					ref = fmt.Sprintf("order %.0f", v)
+				}
 			}
 		}
-		if _, err := s.shipments.Create(r.Context(), tenantID, uuid.Nil, shipments.CreateInput{
+		ship, err := s.shipments.Create(r.Context(), tenantID, uuid.Nil, shipments.CreateInput{
 			TrackingNumber: tracking,
 			Reference:      ref,
 			Carrier:        carrier,
-			Mode:           "road",
-			Destination:    dest,
-		}); err != nil {
+			// Mode follows the carrier profile (parcel companies move air/road;
+			// e-commerce orders default to the short-haul norm). Hardcoding
+			// "road" for a FedEx box priced the staleness threshold from the
+			// 5-day road norm — 10× too slow to surface a silent parcel.
+			Mode:        modeForCarrier(carrier),
+			Destination: dest,
+		})
+		if err != nil {
 			// Duplicate tracking (replay) or validation: count and continue.
 			skipped++
 			continue
 		}
 		created++
+
+		// Auto-subscribe the customer end-to-end when the order carries an
+		// email: the e-commerce promise is "customer gets updates without the
+		// forwarder lifting a finger". Email is the low-friction, unmetered
+		// channel so consent goes straight to active; the event is auditable
+		// in notification_consent like every portal subscription (ADR 0009).
+		// Best-effort: a failed subscribe must not fail the ingestion the
+		// forwarder's WISMO is bleeding on.
+		if email := strings.TrimSpace(order.Email); email != "" {
+			ok, err := s.subscribeEmailForCommerce(r.Context(), tenantID, ship.ID, email)
+			if err == nil && ok {
+				subscribed++
+			}
+		}
 	}
 	_ = connID
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok": true, "created": created, "skipped": skipped,
+		"ok": true, "created": created, "skipped": skipped, "subscribed": subscribed,
 	})
+}
+
+// modeForCarrier maps a carrier slug to a transport mode for e-commerce
+// fulfilments. Container lines get the ocean norm, parcel networks air, and
+// everything unknown stays road — the ETA/staleness norms are per-mode, so
+// the mode determines how fast silence becomes an exception.
+func modeForCarrier(carrier string) string {
+	switch carrier {
+	case "maersk", "msc", "cma-cgm", "cma_cgm", "hapag", "cosco", "one", "evergreen":
+		return "ocean"
+	case "fedex", "dhl", "ups":
+		return "air"
+	default:
+		return "road"
+	}
+}
+
+// subscribeEmailForCommerce activates an email subscription for a shipment
+// created by an order webhook. Emails arrive through an HMAC-verified store
+// webhook — consent at checkout — so the email path skips the double
+// opt-in portal loop (SMS/WhatsApp are never touched here: metered, and
+// requiring interactive consent). Caps mirror handleSubscribe.
+func (s *Server) subscribeEmailForCommerce(ctx context.Context, tenantID, shipmentID uuid.UUID, email string) (bool, error) {
+	rhash := subjectHash(email)
+	subscribed := false
+	err := db.WithTenant(ctx, s.pool, tenantID, func(tx pgx.Tx) error {
+		var total int
+		if err := tx.QueryRow(ctx, `
+			SELECT count(*) FROM tracking_subscriptions
+			WHERE shipment_id = $1 AND status IN ('pending','active')`, shipmentID).Scan(&total); err != nil {
+			return err
+		}
+		if total >= maxSubscribersPerShipment {
+			return errSubscribeCap
+		}
+		tag, err := tx.Exec(ctx, `
+			INSERT INTO tracking_subscriptions
+				(tenant_id, shipment_id, channel, recipient, recipient_hash, status,
+				 consent_at, confirmed_at, source, digest_only)
+			VALUES ($1,$2,'email',$3,$4,'active', now(), now(), 'commerce', false)
+			ON CONFLICT (shipment_id, channel, recipient) DO NOTHING`,
+			tenantID, shipmentID, email, rhash)
+		if err != nil {
+			return err
+		}
+		subscribed = tag.RowsAffected() > 0
+		// Retain the compliance record in the SAME shape and table every
+		// portal path uses (audit joins on recipient_hash), with the store's
+		// HMAC as the reason. 'requested'+'confirmed' together: consent at
+		// checkout, delivered by the webhook's signature.
+		_, _ = tx.Exec(ctx, `
+			INSERT INTO notification_consent
+				(tenant_id, shipment_id, channel, recipient, recipient_hash, action, reason, ip_hash)
+			VALUES ($1,$2,'email',$3,$4,'confirmed','commerce_order_webhook','')`,
+			tenantID, shipmentID, email, rhash)
+		return nil
+	})
+	return subscribed, err
 }
 
 func verifyCommerceSignature(provider, secret string, body []byte, r *http.Request) bool {

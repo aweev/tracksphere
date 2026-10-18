@@ -313,6 +313,14 @@ type assignAlertRequest struct {
 	SnoozeMinutes int    `json:"snoozeMinutes,omitempty"`
 	RootCause     string `json:"rootCause,omitempty"`
 	Note          string `json:"note,omitempty"`
+	// Resolution records the closure verdict (POST /alerts/{id}/resolve).
+	// Empty → customer_notified, the honourable default: closing an alert
+	// after telling the customer is what 95% of real closures are. The other
+	// values exist for precision honesty — a false_positive MUST be recorded
+	// as such or `usefulPct` (precision >85% target) drifts toward 100%
+	// fiction and the rule-tuning loop loses its error signal. Mirrors the
+	// DB CHECK in 000016.
+	Resolution string `json:"resolution,omitempty"`
 }
 
 // handleAssignAlert POST /api/v1/alerts/{id}/assign
@@ -451,6 +459,18 @@ var rootCauses = map[string]bool{
 
 func validRootCause(s string) bool { return rootCauses[s] }
 
+// validResolution validates the closure verdict against the DB CHECK family —
+// the same set migration 000016 enforces, kept in one home so a new verdict
+// fails the handler 400 before it ever reaches the constraint's 500.
+func validResolution(s string) bool {
+	switch s {
+	case "", "condition_cleared", "customer_notified", "carrier_contacted",
+		"documents_filed", "delivered", "duplicate", "false_positive", "wont_fix":
+		return true
+	}
+	return false
+}
+
 // handleResolveAlertRequest carries the closure classification.
 func (s *Server) resolveHandler(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseID(chiParam(r, "id"))
@@ -470,8 +490,12 @@ func (s *Server) resolveHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_input", "Unknown root cause")
 		return
 	}
+	if !validResolution(req.Resolution) {
+		writeError(w, http.StatusBadRequest, "invalid_input", "Unknown resolution verdict")
+		return
+	}
 	user := currentUser(r)
-	shipmentID, err := s.resolveAlertWithCause(r.Context(), user.TenantID, user.ID, id, req.RootCause, req.Note)
+	shipmentID, err := s.resolveAlertWithCause(r.Context(), user.TenantID, user.ID, id, req.RootCause, req.Note, req.Resolution)
 	if err != nil {
 		s.domainError(w, err)
 		return
@@ -485,18 +509,28 @@ func (s *Server) resolveHandler(w http.ResponseWriter, r *http.Request) {
 // resolveAlertWithCause closes an alert and records why. The root cause is the
 // closure feedback that feeds carrier scorecards and ETA calibration — without
 // it the operator's work produces no number and the loop never closes.
-func (s *Server) resolveAlertWithCause(ctx context.Context, tenantID, userID, alertID uuid.UUID, rootCause, note string) (uuid.UUID, error) {
+//
+// The verdict (resolution) defaults to customer_notified: honourable, because
+// the normal close-out is "told the customer, set expectation". But a verdict
+// is data, not a formality — recording a false_positive when the detection was
+// wrong is the entire error signal the rule-tuning loop (precision >85%)
+// depends on. Overriding it to always say customer_notified would make
+// analytics report 100% precision regardless of reality.
+func (s *Server) resolveAlertWithCause(ctx context.Context, tenantID, userID, alertID uuid.UUID, rootCause, note, resolution string) (uuid.UUID, error) {
 	var shipmentID uuid.UUID
+	if resolution == "" {
+		resolution = "customer_notified"
+	}
 	err := db.WithTenant(ctx, poolOf(s), tenantID, func(tx pgx.Tx) error {
 		err := tx.QueryRow(ctx, `
 			UPDATE alerts
 			SET status='resolved', resolved_at=now(), resolved_by=$2,
-			    resolution='customer_notified',
-			    root_cause=COALESCE(NULLIF($3,''), root_cause),
-			    note=COALESCE(NULLIF($4,''), note),
+			    resolution=$3,
+			    root_cause=COALESCE(NULLIF($4,''), root_cause),
+			    note=COALESCE(NULLIF($5,''), note),
 			    snoozed_until=NULL
 			WHERE id=$1 AND status='open'
-			RETURNING shipment_id`, alertID, userID, rootCause, note).Scan(&shipmentID)
+			RETURNING shipment_id`, alertID, userID, resolution, rootCause, note).Scan(&shipmentID)
 		if err == pgx.ErrNoRows {
 			return shipments.ErrNotFound
 		}

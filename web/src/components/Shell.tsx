@@ -110,7 +110,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
             <div className="text-lg font-extrabold tracking-tight text-white">
               Track<span className="text-accent-500">Sphere</span>
             </div>
-            <div className="font-mono text-[9px] uppercase tracking-[0.2em] text-slate-400">
+            <div className="font-mono text-[9px] uppercase tracking-[0.2em] text-text-muted">
               Logistics intelligence
             </div>
           </div>
@@ -166,7 +166,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
             </div>
             <div className="min-w-0">
               <div className="truncate text-sm font-semibold text-white">{user?.name || user?.email}</div>
-              <div className="truncate text-[11px] text-slate-400">{user?.email}</div>
+              <div className="truncate text-[11px] text-text-muted">{user?.email}</div>
             </div>
           </div>
           <button
@@ -278,7 +278,7 @@ function CommandPalette({ close }: { close: () => void }) {
                     {s.origin} → {s.destination} · {s.carrier}
                   </span>
                 </span>
-                <span className="text-xs capitalize text-slate-400">{s.status.replace('_', ' ')}</span>
+                <span className="text-xs capitalize text-text-muted">{s.status.replace('_', ' ')}</span>
               </button>
             </li>
           ))}

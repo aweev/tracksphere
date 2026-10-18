@@ -123,7 +123,7 @@ export default function LoginPage() {
                 setCode('');
                 setError('');
               }}
-              className="w-full text-center text-xs font-semibold text-slate-400 hover:text-slate-600"
+              className="w-full text-center text-xs font-semibold text-text-muted hover:text-slate-600"
             >
               Back to sign in
             </button>
@@ -163,7 +163,7 @@ export default function LoginPage() {
             </button>
             {sso && (sso.google || sso.microsoft) ? (
               <div className="space-y-2 pt-1">
-                <div className="flex items-center gap-3 text-xs text-slate-400">
+                <div className="flex items-center gap-3 text-xs text-text-muted">
                   <span className="h-px flex-1 bg-slate-200" /> or <span className="h-px flex-1 bg-slate-200" />
                 </div>
                 {sso.google ? (

@@ -136,6 +136,14 @@ func (q *Queue) EnqueueTenant(ctx context.Context, tenantID uuid.UUID, kind stri
 	return tx.Commit(ctx)
 }
 
+// EnqueueTenantTyped is EnqueueTenant with a compile-time payload contract.
+// It is a free function (not a method) because Go methods cannot introduce
+// type parameters. Prefer it for all new tenant jobs; the untyped
+// EnqueueTenant remains for open event data only.
+func EnqueueTenantTyped[T any](q *Queue, ctx context.Context, tenantID uuid.UUID, kind string, payload T, runAt time.Time) error {
+	return q.EnqueueTenant(ctx, tenantID, kind, payload, runAt)
+}
+
 type jobRow struct {
 	ID          int64
 	Kind        string

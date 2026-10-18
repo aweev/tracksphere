@@ -217,6 +217,59 @@ func (s *Server) writePerTenantMetrics(out *strings.Builder, ctx context.Context
 				count, map[string]string{"tenant_id": tenantID})
 		}
 	}
+
+	// Notification outcomes per tenant+channel, last hour (SLO §4:
+	// email 99.5%, sms/whatsapp 99% — the per-tenant cut localises a
+	// provider outage to the tenants it actually hits).
+	notifRows, err := s.pool.Query(ctx, `
+		SELECT tenant_id, channel, status, count(*)
+		FROM notifications
+		WHERE created_at > now() - interval '1 hour'
+		GROUP BY tenant_id, channel, status
+	`)
+	if err != nil {
+		s.log.Error("notifications query failed", "err", err)
+	} else {
+		defer notifRows.Close()
+		for notifRows.Next() {
+			var tenantID, channel, status string
+			var count int64
+			if err := notifRows.Scan(&tenantID, &channel, &status, &count); err != nil {
+				continue
+			}
+			name := "tracksphere_notifications_sent_total"
+			if status == "failed" {
+				name = "tracksphere_notifications_failed_total"
+			} else if status != "sent" {
+				continue // 'skipped' is budget working as designed, not an SLI
+			}
+			writeGauge(out, name, "Notifications in last hour",
+				count, map[string]string{"tenant_id": tenantID, "channel": channel})
+		}
+	}
+
+	// Digest queue depth per tenant (digest-over-drop proof: queued is
+	// promised, never dropped; a growing queue pages before customers wait).
+	digestRows, err := s.pool.Query(ctx, `
+		SELECT tenant_id, count(*)
+		FROM notification_digest_queue
+		WHERE flushed_at IS NULL
+		GROUP BY tenant_id
+	`)
+	if err != nil {
+		s.log.Error("digest queue query failed", "err", err)
+	} else {
+		defer digestRows.Close()
+		for digestRows.Next() {
+			var tenantID string
+			var count int64
+			if err := digestRows.Scan(&tenantID, &count); err != nil {
+				continue
+			}
+			writeGauge(out, "tracksphere_interrupts_queued_total", "Digests queued per tenant",
+				count, map[string]string{"tenant_id": tenantID, "reason": "digest"})
+		}
+	}
 }
 
 func writeGauge(out *strings.Builder, name, help string, value int64, labels map[string]string) {

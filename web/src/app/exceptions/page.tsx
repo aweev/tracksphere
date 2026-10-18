@@ -155,8 +155,17 @@ function ExceptionsBody() {
   };
 
   const resolve = useMutation({
-    mutationFn: ({ id, rootCause, note }: { id: string; rootCause?: AlertRootCause; note?: string }) =>
-      authApi.resolveAlert(id, { rootCause, note }),
+    mutationFn: ({
+      id,
+      rootCause,
+      note,
+      resolution,
+    }: {
+      id: string;
+      rootCause?: AlertRootCause;
+      note?: string;
+      resolution?: string;
+    }) => authApi.resolveAlert(id, { rootCause, note, resolution }),
     onSuccess: (_data, vars) => {
       // Peak-end relief: the resolution moment must FEEL like competence.
       // The resolved card unmounts on refresh, so the proof lives here — a
@@ -408,7 +417,7 @@ function ExceptionsBody() {
                     <div className="mt-1 text-sm font-bold text-navy-950">{a.title}</div>
                     <div className="mt-0.5 text-xs text-slate-600">{a.message}</div>
 
-                    <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[11px] text-slate-400">
+                    <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[11px] text-text-muted">
                       {a.trackingNumber ? (
                         <Link
                           href={`/shipments/${a.shipmentId}`}
@@ -505,7 +514,9 @@ function ExceptionsBody() {
                     alert={a}
                     team={team}
                     onAssign={(patch) => assign.mutate({ id: a.id, ...patch })}
-                    onResolve={(rootCause, note) => resolve.mutate({ id: a.id, rootCause, note })}
+                    onResolve={(rootCause, note, resolution) =>
+                      resolve.mutate({ id: a.id, rootCause, note, resolution })
+                    }
                     busy={
                       assign.isPending || resolve.isPending
                     }
@@ -654,7 +665,7 @@ function TriagePanel({
     snoozeMinutes?: number;
     rootCause?: AlertRootCause;
   }) => void;
-  onResolve: (rootCause: AlertRootCause, note: string) => void;
+  onResolve: (rootCause: AlertRootCause, note: string, resolution?: string) => void;
   busy: boolean;
   failed: boolean;
 }) {
@@ -857,6 +868,15 @@ function TriagePanel({
           className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-navy-950"
         >
           Resolve with cause
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => onResolve('other', note.trim() || 'Duplicate/noise — closed as false alarm', 'false_positive')}
+          title="Records the alert as a false positive so rule precision (useful %) stays honest — hiding noise as 'customer notified' would inflate the calibration."
+          className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-navy-950"
+        >
+          False alarm
         </button>
         <button
           type="button"

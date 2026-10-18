@@ -174,3 +174,45 @@ func (s *Server) overShipmentQuota(ctx context.Context, tenantID uuid.UUID, plan
 	})
 	return n >= int64(limits.Shipments)
 }
+
+// overCountQuota is the RLS-pinned counter behind every non-shipment quota.
+// kind routes to the right table and the right filter; unknown kinds deny
+// closed (fail-closed over accidental limit relaxation).
+func (s *Server) overCountQuota(ctx context.Context, tenantID uuid.UUID, plan, kind string) bool {
+	limits, ok := plans[plan]
+	if !ok {
+		limits = plans["starter"]
+	}
+	var max int
+	query := ""
+	switch kind {
+	case "seats":
+		max = limits.Seats
+		// users has no RLS by design (000002) — count at pool level.
+		var n int64
+		_ = s.pool.QueryRow(ctx,
+			`SELECT count(*) FROM users WHERE tenant_id=$1 AND is_active=true`, tenantID).Scan(&n)
+		if max < 0 {
+			return false
+		}
+		return n >= int64(max)
+	case "apiKeys":
+		max = limits.APIKeys
+		query = `SELECT count(*) FROM api_keys WHERE revoked_at IS NULL`
+	case "endpoints":
+		max = limits.Endpoints
+		query = `SELECT count(*) FROM tenant_webhooks`
+	default:
+		return true // unknown resource → deny
+	}
+	if max < 0 {
+		return false
+	}
+	var n int64
+	// Both tables are RLS-protected (000015): counts must run tenant-pinned or
+	// they read 0 and silently disable the cap.
+	_ = db.WithTenant(ctx, s.pool, tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, query).Scan(&n)
+	})
+	return n >= int64(max)
+}

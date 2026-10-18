@@ -67,6 +67,12 @@ func (s *Server) handleCreateWebhookEndpoint(w http.ResponseWriter, r *http.Requ
 		}
 	}
 	user := currentUser(r)
+	// Webhook endpoint quota (429): deleting an endpoint frees the slot.
+	if s.overCountQuota(r.Context(), user.TenantID, s.tenantPlan(r.Context(), user.TenantID), "endpoints") {
+		writeError(w, http.StatusTooManyRequests, "quota_exceeded",
+			"Webhook endpoint limit reached for your plan — remove an unused endpoint or upgrade. Usage is shown on /billing.")
+		return
+	}
 	secret := newEndpointSecret()
 	var id uuid.UUID
 	err := db.WithTenant(r.Context(), s.pool, user.TenantID, func(tx pgx.Tx) error {
