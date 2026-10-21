@@ -39,7 +39,7 @@ coverage.html
 # Set-Cookie: tracksphere_session values plus plaintext passwords. They were
 # removed from the working tree but the root commit was never rewritten, so
 # they stayed fetchable on the public remote. .gitignore does not protect
-# already-committed files — see AUDIT-2026-10-04.md section 0.1.
+# already-committed files — see docs/POSTURE.md (§3 History debt).
 *-headers.txt
 *-cookies.txt
 curl-*.txt

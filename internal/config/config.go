@@ -336,27 +336,3 @@ var KnownCarriers = map[string]bool{
 	"cma-cgm": true, "cma_cgm": true, "hapag": true, "msc": true,
 	"cosco": true, "one": true, "evergreen": true,
 }
-
-// RecommendedDBPoolSize returns the recommended max connections based on
-// the application's concurrency requirements.
-// Formula: (API workers + worker pollers + background tasks) × safety factor
-// Default safety factor = 2
-func (c *Config) RecommendedDBPoolSize() int {
-	// API needs connections for HTTP handlers + SSE hub + metrics
-	apiConns := c.APIWorkers + 2 // +2 for SSE hub, metrics
-
-	// Worker needs connections for pollers + reaper + archiver + LISTEN + scheduler
-	workerConns := c.WorkerConcurrency + 4 // +4 for background tasks
-
-	// Total with safety factor
-	total := (apiConns + workerConns) * 2
-
-	// Cap at reasonable maximum
-	if total > 100 {
-		total = 100
-	}
-	if total < 10 {
-		total = 10
-	}
-	return total
-}

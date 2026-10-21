@@ -81,7 +81,7 @@ Not a map. A **map is table stakes** — every competitor ships one. This is:
 | Carrier webhooks (HMAC) + poll adapter framework + simulator | shipped |
 | Outbound webhooks with signed delivery log | shipped |
 | API keys, RBAC (owner/admin/member), audit log, MFA, OIDC SSO | shipped |
-| Entitlements, quotas, Stripe checkout | shipped, not yet enforced end-to-end |
+| Entitlements, quotas, Stripe checkout | shipped — quotas enforced at the doors (seats, API keys, webhook endpoints, plan-gated shipment creation); billing flows not yet e2e-verified |
 | Native carrier API integrations (Maersk, DHL, …) | **not built** — webhooks + polling only |
 | ML ETA model | **not built** — heuristic with a lane-learned fallback, labelled as such |
 | SOC 2, multi-region, carbon reporting, cold-chain IoT | roadmap |

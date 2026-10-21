@@ -110,8 +110,8 @@ services:
       - '${WEB_PORT:-3000}:3000'
 
   # Nightly pg_dump sidecar (P1-1). Dumps over the compose network to
-  # /backups (host-mounted volume — copy off-host per docs/pgbackrest-setup.md
-  # for real DR) and records each run in backup_runs, which /statusz reads.
+  # /backups (host-mounted volume — copy off-host to S3/R2/rsync for real DR)
+  # and records each run in backup_runs, which /statusz reads.
   # No ports: never publicly reachable.
   backup:
     image: postgres:16-alpine

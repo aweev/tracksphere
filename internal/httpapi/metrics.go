@@ -284,8 +284,3 @@ func writeGauge(out *strings.Builder, name, help string, value int64, labels map
 	fmt.Fprintf(out, `# HELP %s %s\n# TYPE %s gauge\n%s%s %d\n`,
 		name, help, name, name, labelStr, value)
 }
-
-func writeGaugeSimple(out *strings.Builder, name, help string, value int64) {
-	fmt.Fprintf(out, `# HELP %s %s\n# TYPE %s gauge\n%s %d\n`,
-		name, help, name, name, value)
-}
