@@ -1,300 +1,185 @@
 # TrackSphere Service Level Objectives (SLOs)
 
-**Version:** 1.0  
-**Effective:** 2026-10-03  
-**Review:** Quarterly
+**Version:** 2.0 · 2026-10-21
+**Supersedes:** v1.0 (2026-10-03). v1.0 listed metrics as "key metrics to emit"
+that were never incremented anywhere in the code, and an alert/pager/backup
+stack that was never deployed. This version describes only what exists in code
+today, and what is explicitly blocked. See `docs/POSTURE.md` §4 and
+`UPGRADE_PLAN.md` Phase 2 for the work to close the gaps.
+
+**Standing rule:** a doc that describes a system must name the code that makes
+it true. If a claim and the code disagree, the code is reality and the doc is
+broken.
 
 ---
 
-## 1. Service Level Indicators (SLIs)
+## 1. Metrics emitted today (verified against code, 2026-10-21)
 
-| SLI | Description | Measurement |
-|-----|-------------|-------------|
-| **Ingestion Freshness (p99)** | Time from carrier webhook receipt to shipment visibility in API | `histogram_quantile(0.99, rate(ingestion_duration_seconds_bucket[5m]))` |
-| **API Availability** | Successful HTTP responses (2xx/3xx) / total requests | `sum(rate(http_requests_total{status=~"2..|3.."}[5m])) / sum(rate(http_requests_total[5m]))` |
-| **SSE Delivery Latency** | Time from `pg_notify` to browser `message` event | `histogram_quantile(0.99, rate(sse_delivery_duration_seconds_bucket[5m]))` |
-| **Sweep Completion** | Time from sweep lease acquisition to all tenants processed | `histogram_quantile(0.99, rate(sweep_duration_seconds_bucket[5m]))` |
-| **Notification Delivery** | Notifications sent / notifications attempted (per channel) | `sum(rate(notifications_sent_total[5m])) / sum(rate(notifications_attempted_total[5m]))` |
-| **Queue Depth (per tenant)** | Pending jobs for tenant | `jobs_pending{tenant="..."}` |
-| **DLQ Aging** | Oldest dead job age per tenant | `max(job_age_seconds{status="dead", tenant="..."})` |
+Every name below is a real Prometheus series incremented by a named call site.
 
----
+### 1.1 API process (scrapeable via `GET /api/v1/metrics`,
+gated by `TRACKSPHERE_EXPOSE_METRICS`; see the `/metrics is reconnaissance`
+warning in the README)
 
-## 2. Service Level Objectives (SLOs)
+| Series | Call sites |
+|---|---|
+| `tracksphere_ingestion_duration_seconds{carrier,source}` | `internal/httpapi/webhook_handlers.go` |
+| `tracksphere_webhook_received_total{carrier,status}` (`ok/stale_timestamp/invalid_signature/ingest_failed/flood/bad_event`) | `internal/httpapi/webhook_handlers.go` |
+| `tracksphere_circuit_breaker_state{client}` | `internal/httpclient/httpclient.go` |
+| `tracksphere_circuit_breaker_failures_total{client}` | `internal/httpclient/httpclient.go` |
+| `tracksphere_circuit_breaker_trips_total{client}` | `internal/httpclient/httpclient.go` |
+| `tracksphere_db_pool_connections_active/idle/max` | `cmd/api/main.go` → `metrics.UpdateDBPoolMetrics` |
 
-| SLI | Target | Window | Error Budget | Alert Threshold |
-|-----|--------|--------|--------------|-----------------|
-| Ingestion Freshness (p99) | < 5 seconds | 30 days | 43.2 min | > 5s for 5m |
-| API Availability | ≥ 99.9% | 30 days | 43.2 min | < 99.9% for 15m |
-| SSE Delivery Latency | < 2 seconds | 30 days | 43.2 min | > 2s for 5m |
-| Sweep Completion | < 60 seconds | 30 days | 43.2 min | > 60s for 15m |
-| Notification Delivery (email) | ≥ 99.5% | 30 days | 3.6 hrs | < 99.5% for 1h |
-| Notification Delivery (SMS/WhatsApp) | ≥ 99% | 30 days | 7.2 hrs | < 99% for 1h |
-| Queue Depth (per tenant) | < 1000 pending | Continuous | N/A | > 1000 for 10m |
-| DLQ Aging (per tenant) | < 1 hour | Continuous | N/A | > 1h for 30m |
+### 1.2 Per-tenant DB-derived gauges (API process, query-computed at scrape
+time, `?per_tenant=true` + admin session or API key)
 
----
+| Series | Source |
+|---|---|
+| `tracksphere_jobs_pending{tenant,kind}` | `internal/httpapi/metrics.go` |
+| `tracksphere_job_age_seconds{status="dead",tenant}` | `internal/httpapi/metrics.go` |
+| `tracksphere_sse_subscribers{tenant}` | `internal/httpapi/metrics.go` |
+| `tracksphere_interrupts_sent_total{tenant,severity}` (last hour) | `internal/httpapi/metrics.go` |
+| `tracksphere_interrupts_queued_total{tenant}` | `internal/httpapi/metrics.go` |
+| `tracksphere_active_shipments{tenant}` | `internal/httpapi/metrics.go` |
+| `tracksphere_notifications_sent_total` / `..._failed_total{tenant,channel}` (last hour) | `internal/httpapi/metrics.go` |
 
-## 3. Error Budget Policy
+### 1.3 Worker process (incremented in `cmd/worker` — **currently invisible**,
+because the worker starts no HTTP listener; blocked on `UPGRADE_PLAN` P2-M1)
 
-- **Burn rate 1x** (normal): Page on-call if budget exhaustion projected in < 6h
-- **Burn rate 2x**: Page on-call immediately
-- **Burn rate 10x**: Page on-call + escalate to engineering lead
-- **Budget exhausted**: Freeze non-critical deployments; focus on reliability
+| Series | Call sites |
+|---|---|
+| `tracksphere_sweep_duration_seconds` | `internal/workers/sweep.go` |
+| `tracksphere_sweep_tenants_processed_total` | `internal/workers/sweep.go` |
+| `tracksphere_sweep_alerts_raised_total{severity}`, `..._cleared_total`, `..._ceiling_hits_total{tenant}` | `internal/workers/sweep.go` |
+| `tracksphere_notifications_failed_total{channel,tenant,error}` | `internal/workers/notify_router.go` (metered-disabled path only) |
+| `tracksphere_interrupts_sent_total{tenant,severity}`, `..._queued_total{tenant,reason}` | `internal/workers/notify_router.go` |
+| `tracksphere_digests_flushed_total{tenant}` | `internal/workers/digest.go` |
 
----
+Circuit-breaker series (§1.1) are also incremented in the worker and are
+likewise unscrapable until P2-M1 lands.
 
-## 4. Monitoring Implementation
+## 2. Not emitted (declared but dead — do not query these series)
 
-### 4.1 Metrics Endpoint (`/api/v1/metrics`)
+`tracksphere_http_requests_total`, `tracksphere_http_request_duration_seconds`,
+`tracksphere_sse_subscribers_active`, `tracksphere_sse_delivery_duration_seconds`,
+`tracksphere_sse_events_published_total`, `tracksphere_jobs_running`,
+`tracksphere_jobs_dead` (gauge form), `tracksphere_job_duration_seconds`,
+`tracksphere_notifications_attempted_total`, `tracksphere_notifications_sent_total`
+(counter form §1.1-style), `tracksphere_jobs_pending` (worker gauge form — the
+per-tenant §1.2 gauge above is the live variant).
 
-Expose via `TRACKSPHERE_EXPOSE_METRICS=true`. Metrics prefixed `tracksphere_`.
+Until `UPGRADE_PLAN` P2-M2 lands, **no SLI can be computed for**: API
+availability (5xx rate), SSE delivery latency, notification delivery, job
+duration. The corresponding objectives in §4 are marked `BLOCKED`.
 
-Key metrics to emit:
-```prometheus
-# Ingestion
-tracksphere_ingestion_duration_seconds_bucket{le="..."} 
-tracksphere_webhook_received_total{carrier="...", status="ok|error"}
+## 3. Objectives
 
-# API
-tracksphere_http_requests_total{method="...", path="...", status="..."}
-tracksphere_http_request_duration_seconds_bucket{method="...", path="...", le="..."}
+| SLI | Target | Window | Status |
+|-----|--------|--------|--------|
+| Ingestion freshness (webhook → visibility, p99) | < 5 s | 30 d | **Measurable** — `tracksphere_ingestion_duration_seconds` |
+| Webhook handling failure rate | < 1% | 30 d | **Measurable** — `tracksphere_webhook_received_total{status!~"ok"}` |
+| API availability | ≥ 99.9% | 30 d | **BLOCKED** — no HTTP request metrics yet (P2-M2) |
+| SSE delivery latency | < 2 s | 30 d | **BLOCKED** — needs P2-M2 + P2-M1 |
+| Sweep completion (lease → all tenants, p99) | < 60 s | 30 d | **BLOCKED** — series exist but only in the worker process (P2-M1) |
+| Notification delivery (email) | ≥ 99.5% | 30 d | **BLOCKED** — attempted counter absent (P2-M2) |
+| Notification delivery (SMS/WhatsApp) | ≥ 99% | 30 d | **BLOCKED** — attempted counter absent (P2-M2) |
+| Per-tenant queue depth | < 1 000 pending | ad hoc | **Measurable** — `tracksphere_jobs_pending` (§1.2) |
+| Per-tenant DLQ aging | < 1 h dead | ad hoc | **Measurable** — `tracksphere_job_age_seconds` (§1.2) |
+| DB pool saturation | < 80% | ad hoc | **Measurable** — §1.1 pool gauges |
 
-# SSE
-tracksphere_sse_subscribers_active{tenant="..."}
-tracksphere_sse_delivery_duration_seconds_bucket{le="..."}
-tracksphere_sse_events_published_total{type="...", tenant="..."}
+Error-budget burn-rate policy (page at 1×–10× per §3 v1.0 — policy is retained
+but can only bind the `Measurable` rows; no alerting stack is deployed yet
+(§5), so today these are measurement targets, not paged contracts).
 
-# Queue
-tracksphere_jobs_pending{tenant="...", kind="..."}
-tracksphere_jobs_running{tenant="...", kind="..."}
-tracksphere_jobs_dead{tenant="...", kind="..."}
-tracksphere_job_duration_seconds_bucket{kind="...", le="..."}
-tracksphere_sweep_duration_seconds_bucket{le="..."}
-tracksphere_sweep_tenants_processed_total
-tracksphere_sweep_alerts_raised_total{severity="..."}
-tracksphere_sweep_alerts_cleared_total
+## 4. Alert rules
 
-# Notifications
-tracksphere_notifications_attempted_total{channel="...", tenant="..."}
-tracksphere_notifications_sent_total{channel="...", tenant="..."}
-tracksphere_notifications_failed_total{channel="...", tenant="...", error="..."}
-tracksphere_interrupts_sent_total{tenant="...", severity="..."}
-tracksphere_interrupts_queued_total{tenant="...", reason="..."}
-tracksphere_digests_flushed_total{tenant="..."}
-
-# Database
-tracksphere_db_pool_connections_active
-tracksphere_db_pool_connections_idle
-tracksphere_db_pool_connections_max
-```
-
-### 4.2 Alerting Rules (PrometheusRule)
+Rules below are **valid expressions** — every series they reference is emitted
+today. They are documentation of intent; **no Alertmanager or Prometheus
+deployment exists in this repo yet** (compose ships none). Rules depending on
+blocked series (§2) are deliberately omitted rather than kept non-executable —
+they return as P2-M3 lands.
 
 ```yaml
+# docs/SLO.md section 4 — valid against emitted series only (2026-10-21)
 groups:
 - name: tracksphere-slos
   rules:
-  # Ingestion freshness
   - alert: IngestionFreshnessSLOBreach
     expr: |
       histogram_quantile(0.99, rate(tracksphere_ingestion_duration_seconds_bucket[5m])) > 5
     for: 5m
-    labels:
-      severity: critical
-      slo: ingestion_freshness
+    labels: { severity: critical, slo: ingestion_freshness }
     annotations:
       summary: "Ingestion p99 > 5s for 5m"
-      description: "Carrier webhook to API visibility latency exceeded SLO"
+      runbook: https://todo/P3-R4-runbook-ingestion
 
-  # API availability
-  - alert: APIAvailabilitySLOBreach
-    expr: |
-      (sum(rate(tracksphere_http_requests_total{status=~"5.."}[5m])) 
-       / sum(rate(tracksphere_http_requests_total[5m]))) > 0.001
-    for: 15m
-    labels:
-      severity: critical
-      slo: api_availability
-    annotations:
-      summary: "API 5xx rate > 0.1% for 15m"
-      description: "API availability below 99.9% SLO"
-
-  # SSE delivery
-  - alert: SSEDeliveryLatencySLOBreach
-    expr: |
-      histogram_quantile(0.99, rate(tracksphere_sse_delivery_duration_seconds_bucket[5m])) > 2
-    for: 5m
-    labels:
-      severity: warning
-      slo: sse_delivery
-    annotations:
-      summary: "SSE delivery p99 > 2s for 5m"
-
-  # Sweep completion
-  - alert: SweepDurationSLOBreach
-    expr: |
-      histogram_quantile(0.99, rate(tracksphere_sweep_duration_seconds_bucket[5m])) > 60
-    for: 15m
-    labels:
-      severity: warning
-      slo: sweep_completion
-    annotations:
-      summary: "Sweep p99 > 60s for 15m"
-
-  # Per-tenant queue depth
   - alert: TenantQueueDepthHigh
-    expr: |
-      tracksphere_jobs_pending > 1000
+    expr: tracksphere_jobs_pending > 1000
     for: 10m
-    labels:
-      severity: warning
+    labels: { severity: warning }
     annotations:
       summary: "Tenant {{ $labels.tenant }} queue depth > 1000 for 10m"
+      runbook: https://todo/P3-R4-runbook-queue
 
-  # Per-tenant DLQ aging
   - alert: TenantDLQAging
-    expr: |
-      tracksphere_job_age_seconds{status="dead"} > 3600
+    expr: tracksphere_job_age_seconds{status="dead"} > 3600
     for: 30m
-    labels:
-      severity: critical
+    labels: { severity: critical }
     annotations:
-      summary: "Tenant {{ $labels.tenant }} has dead job older than 1h"
+      summary: "Tenant {{ $labels.tenant }} has a dead job older than 1h"
+      runbook: https://todo/P3-R4-runbook-dlq
 
-  # Database pool saturation
   - alert: DBPoolSaturation
     expr: |
       tracksphere_db_pool_connections_active / tracksphere_db_pool_connections_max > 0.8
     for: 5m
-    labels:
-      severity: warning
+    labels: { severity: warning }
     annotations:
       summary: "Database connection pool > 80% utilized"
+      runbook: https://todo/P3-R4-runbook-db-pool
 
-  # Notification delivery rates
-  - alert: EmailDeliveryRateLow
-    expr: |
-      (sum(rate(tracksphere_notifications_sent_total{channel="email"}[5m]))
-       / sum(rate(tracksphere_notifications_attempted_total{channel="email"}[5m]))) < 0.995
-    for: 1h
-    labels:
-      severity: warning
+  - alert: CircuitBreakerOpen
+    expr: tracksphere_circuit_breaker_state > 1
+    for: 1m
+    labels: { severity: warning }
     annotations:
-      summary: "Email delivery rate < 99.5% for 1h"
-
-  - alert: SMSWhatsAppDeliveryRateLow
-    expr: |
-      (sum(rate(tracksphere_notifications_sent_total{channel=~"sms|whatsapp"}[5m]))
-       / sum(rate(tracksphere_notifications_attempted_total{channel=~"sms|whatsapp"}[5m]))) < 0.99
-    for: 1h
-    labels:
-      severity: warning
-    annotations:
-      summary: "SMS/WhatsApp delivery rate < 99% for 1h"
+      summary: "Circuit breaker for {{ $labels.client }} open > 1m"
 ```
 
----
+## 5. Backup & restore (as actually deployed)
 
-## 5. Backup & Restore (pgBackRest)
+Nightly `pg_dump -Fc` sidecar (`deploy/backup.sh` via the `backup` compose
+service), keep 7 dumps on the `pgbackups` volume, each run recorded in
+`backup_runs`. `GET /api/v1/statusz` reports
+`.backup.lastSuccess/.ageHours` and degrades past 30h without a proven backup.
+**Copy off-host is mandatory** (S3/R2/rsync); sidecar "off-host" is a manual
+step today.
 
-### 5.1 Configuration
+- `pgBackRest`/WAL-G PITR is **not deployed** — no WAL archive exists. Restore
+  procedure + SWOT of the SEV-3 alternative (latest dump + re-ingest from
+  `webhook_inbox` / carrier re-poll) are documented in
+  `docs/RUNBOOK_RESTORE.md` §3–§4.
+- Restore drill history (RTO/RPO measurements) lives in
+  `docs/RUNBOOK_RESTORE.md` Step 0; automation target `UPGRADE_PLAN` P3-R1.
 
-```ini
-# /etc/pgbackrest/pgbackrest.conf
-[global]
-repo1-type=s3
-repo1-s3-bucket=tracksphere-backups
-repo1-s3-region=us-east-1
-repo1-s3-endpoint=s3.amazonaws.com
-repo1-retention-full=30
-repo1-retention-diff=7
-repo1-retention-archive=30
-compress-type=lz4
-compress-level=3
-process-max=4
-log-level-console=info
-log-level-file=debug
+## 6. Dashboards & alert routing (not present)
 
-[tracksphere]
-pg1-path=/var/lib/postgresql/data
-pg1-port=5432
-pg1-user=tracksphere_backup
-```
+Grafana dashboards, Alertmanager routing, PagerDuty/Slack wiring: **none in
+repo**. Until then §3 is targets, §4 is fire-drill material. Landed with
+P2-M4.
 
-### 5.2 Backup Schedule
+## 7. Runbooks
 
-| Backup Type | Schedule | Retention |
-|-------------|----------|-----------|
-| Full | Daily 02:00 UTC | 30 days |
-| Differential | Every 6 hours | 7 days |
-| WAL Archive | Continuous | 30 days |
+Existing: `docs/RUNBOOK_RESTORE.md` (with a dated 2026-10-08 drill log).
 
-### 5.3 Restore Testing (Quarterly)
+Planned (authored per-alert when alerting schema lands, P3-R4; do not write
+placeholders sooner — they rot into fiction like v1.0 §8):
+ingestion, API availability, SSE delivery, sweep stall, queue backlog, DLQ,
+DB pool, notification delivery.
 
-**Runbook:** `docs/RUNBOOK_RESTORE.md`
+## 8. Review
 
-1. Provision clean PostgreSQL 16 instance
-2. `pgbackrest --stanza=tracksphere --type=full restore`
-3. Verify schema integrity: `psql -c "SELECT count(*) FROM tenants;"`
-4. Verify data integrity: `psql -c "SELECT count(*) FROM shipments;"`
-5. Run RLS tests: `psql -U tracksphere_app -f scripts/rls_test.sql`
-6. Run e2e tests: `pwsh scripts/e2e.ps1`
-7. Document RTO (target < 4h) and RPO (target < 1h)
-
-### 5.4 Restore Verification Checklist
-
-- [ ] All 23 tenant tables have RLS policies enforced
-- [ ] `shipment_current` read model matches `shipments` + `shipment_events`
-- [ ] `notification_consent` audit trail intact
-- [ ] `alert_rules` seeded correctly per tenant
-- [ ] API starts and serves `/health` 200
-- [ ] Worker processes jobs without error
-- [ ] SSE hub accepts subscribers
-
----
-
-## 6. Dashboard (Grafana)
-
-### 6.1 SLO Dashboard Panels
-
-1. **Error Budget Remaining** — Burn down chart per SLO
-2. **SLI Trends** — 30d rolling p99 for each SLI
-3. **Per-Tenant Health** — Queue depth, DLQ age, active shipments, critical alerts
-4. **Ingestion Pipeline** — Webhook rate, processing latency, error rate
-5. **Notification Funnel** — Attempted → Sent → Delivered per channel
-6. **Database Health** — Pool utilization, replication lag, vacuum status
-
-### 6.2 Alert Routing
-
-| Alert | Route | Escalation |
-|-------|-------|------------|
-| Critical SLO breach | PagerDuty → On-call | +15min → Engineering lead |
-| Warning SLO breach | Slack #alerts | +1h → On-call |
-| Tenant queue/DLQ | Slack #tenant-ops | +30min → On-call |
-| DB pool saturation | PagerDuty → On-call | Immediate |
-
----
-
-## 7. Review Cadence
-
-| Review | Frequency | Participants | Output |
-|--------|-----------|--------------|--------|
-| SLO compliance | Monthly | Engineering + Product | SLO report, budget burn analysis |
-| Alert tuning | Monthly | On-call rotation | Alert noise reduction, threshold adjustments |
-| Backup restore test | Quarterly | Platform + Engineering | Restore report, RTO/RPO measurement |
-| Capacity planning | Quarterly | Engineering | Scaling trigger evaluation |
-
----
-
-## 8. Runbook Links
-
-- `docs/RUNBOOK_INGESTION_LATENCY.md`
-- `docs/RUNBOOK_API_AVAILABILITY.md`
-- `docs/RUNBOOK_SSE_DELIVERY.md`
-- `docs/RUNBOOK_SWEEP_STALLED.md`
-- `docs/RUNBOOK_QUEUE_BACKLOG.md`
-- `docs/RUNBOOK_DLQ_GROWING.md`
-- `docs/RUNBOOK_DB_POOL_EXHAUSTION.md`
-- `docs/RUNBOOK_NOTIFICATION_DELIVERY.md`
-- `docs/RUNBOOK_RESTORE.md`
+| Review | Frequency | Output |
+|--------|-----------|--------|
+| This doc vs. emitted metrics | Quarterly + at every Phase-2 change | Metric-to-code grep proof, drop dead series |
+| Targets vs. observed | Quarterly (after first dashboards) | Adjust targets/budgets or accept risk |

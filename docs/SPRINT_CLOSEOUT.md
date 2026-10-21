@@ -1,6 +1,6 @@
 # Sprint close-out — reliability, amplification, motion & onboarding (2026-10-18)
 
-Scope: Phases 0–3 of the mission file (`# TRACKSPHERE: THE "IT" PROJECT — MAKE I.md`),
+Scope: Phases 0–3 of the mission file (`docs/MISSION.md`),
 Sprints A and B inclusive. Everything below is committed to `main` and verified by
 the exact commands listed.
 

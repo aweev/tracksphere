@@ -113,8 +113,9 @@ Concretely today:
 - "AI carrier-detect" is a **tracking-number shape heuristic**, not a model.
 - Carrier connectivity is **webhooks plus a poll adapter framework**, not native
   integrations with Maersk or DHL.
-- **No uptime SLA is claimed.** There is no SLO yet; ADR 0007/0008 gave the
-  observability to build one.
+- **No uptime SLA is claimed.** `docs/SLO.md` v2 defines targets and lists what
+  is measured vs blocked; no paged SLO contract exists until alerting is wired
+  (`UPGRADE_PLAN.md` Phase 2).
 - The empty exception queue proves it is watched: `GET /api/v1/alerts` carries
   `readModelAt` (max `shipment_current.updated_at`), rendered as "read model
   fresh as of Xm ago" — absent before the first sweep, never faked.

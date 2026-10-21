@@ -14,8 +14,9 @@
 - Every dump writes `backup_runs`; `GET /api/v1/statusz` reports
   `.backup.lastSuccess/.ageHours` and flips to `degraded` past 30h without a
   proven backup. Alert on `status != operational` and on `backup_runs` gaps.
-- Pre-migration manual dumps still required until pgBackRest PITR ships
-  (see `docs/pgbackrest-setup.md`): record the SHA in the PR (PR template).
+- Only nightly `pg_dump` is deployed today; no PITR path exists yet. Any repair
+  migration must be preceded by a manual dump: record the SHA in the PR
+  (PR template).
 
 ### Drill log (append each rehearsal — no drill, no "production-ready")
 
@@ -74,6 +75,9 @@ docker compose stop api worker web
 #    - Mount clean volume
 
 # 3. Restore from pgBackRest
+# (NOT DEPLOYED — until pgBackRest/WAL-G ships, restore with:
+#   `pg_restore -d $TRACKSPHERE_MIGRATIONS_URL --clean --if-exists <dump>`
+#  and re-run `migrate --version` to confirm schema position.)
 pgbackrest --stanza=tracksphere \
   --type=full \
   --target-action=promote \
@@ -125,6 +129,10 @@ pwsh scripts/e2e.ps1
 ---
 
 ## 4. SEV-3: Point-in-Time Recovery (PITR)
+
+> **NOT YET DEPLOYED** — no WAL archive exists today with pg_dump-only backups.
+> Rehearsable alternative: restore latest nightly dump, re-ingest events from
+> `webhook_inbox` / carrier re-poll since the backup timestamp.
 
 ### 4.1 When to Use
 - Bad migration deployed

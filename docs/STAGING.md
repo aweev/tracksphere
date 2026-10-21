@@ -9,7 +9,7 @@ Source of truth for config: `deploy/.env.example`. This doc is the checklist;
 ```bash
 go vet ./... && go test ./... -count=1
 (cd web && npm run typecheck)
-go run ./cmd/migrate --version   # expect 000011_billing_trial (or later)
+go run ./cmd/migrate --version   # expect 000033_phase1_query_indexes (or later; see internal/db/migrations)
 ```
 
 ## 1. Secrets (never reuse dev defaults)
@@ -35,7 +35,7 @@ docker compose logs -f --tail=50 api worker
 ```
 
 What happens: `api` applies embedded migrations under an advisory lock
-(`000001…000011`), `worker` starts with `AUTO_MIGRATE=0`, `web` proxies
+(`000001…000033`), `worker` starts with `AUTO_MIGRATE=0`, `web` proxies
 `/api/*` to `api:8080`. Version lands in `/api/v1/health` via `APP_VERSION`.
 
 ## 3. Prove isolation + behavior (staging host or via SSH tunnel)
