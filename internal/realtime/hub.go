@@ -13,6 +13,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/tracksphere/tracksphere/internal/metrics"
 )
 
 // Event is the wire format pushed to browsers (SSE `data:` payload).
@@ -79,6 +81,7 @@ func (h *Hub) subscribe(ctx context.Context, tenantID uuid.UUID, shipment *uuid.
 	h.subs[sub.id] = sub
 	total := len(h.subs)
 	h.mu.Unlock()
+	metrics.SSESubscribersActive.WithLabelValues(tenantID.String()).Inc()
 	h.log.Debug("sse subscribe", "tenant", tenantID, "shipment", shipment, "sub", sub.id, "total", total)
 
 	// Record subscription in DB (best-effort, async)
@@ -88,18 +91,29 @@ func (h *Hub) subscribe(ctx context.Context, tenantID uuid.UUID, shipment *uuid.
 
 	go func() {
 		<-ctx.Done()
-		h.mu.Lock()
-		if cur, ok := h.subs[sub.id]; ok {
-			delete(h.subs, sub.id)
-			close(cur.ch)
-		}
-		h.mu.Unlock()
+		h.remove(sub.id)
 		// Record disconnect
 		if h.pool != nil {
 			go h.recordDisconnect(sub.id)
 		}
 	}()
 	return sub.ch
+}
+
+// remove deletes a subscriber and decrements the per-tenant gauge. Both exit
+// paths (context cancellation and the slow-consumer drop) must go through it
+// so the gauge can never drift from the live map.
+func (h *Hub) remove(id uuid.UUID) {
+	h.mu.Lock()
+	sub, ok := h.subs[id]
+	if ok {
+		delete(h.subs, id)
+		close(sub.ch)
+	}
+	h.mu.Unlock()
+	if ok {
+		metrics.SSESubscribersActive.WithLabelValues(sub.tenant.String()).Dec()
+	}
 }
 
 func (h *Hub) recordSubscription(sub *subscriber) {
@@ -130,10 +144,13 @@ func (h *Hub) recordDisconnect(subID uuid.UUID) {
 	}
 }
 
-// Publish fans an event out to all subscribers of its tenant.
+// Publish fans an event out to all subscribers of its tenant. Fan-out is
+// non-blocking; a slow consumer (channel full) is dropped. The fan-out timer
+// and published counter cover the server-side segment of "SSE is a hint":
+// delivery to the browser additionally depends on its reconnect loop.
 func (h *Hub) Publish(ev Event) {
+	start := time.Now()
 	h.mu.RLock()
-	defer h.mu.RUnlock()
 	for _, sub := range h.subs {
 		if sub.tenant != ev.TenantID {
 			continue
@@ -151,15 +168,13 @@ func (h *Hub) Publish(ev Event) {
 			go h.drop(sub.id)
 		}
 	}
+	h.mu.RUnlock()
+	metrics.SSEEventsPublishedTotal.WithLabelValues(ev.Type, ev.TenantID.String()).Inc()
+	metrics.SSEDeliveryDuration.Observe(time.Since(start).Seconds())
 }
 
 func (h *Hub) drop(id uuid.UUID) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if sub, ok := h.subs[id]; ok {
-		delete(h.subs, id)
-		close(sub.ch)
-	}
+	h.remove(id)
 }
 
 // Count reports active subscribers (exposed at /api/v1/health).

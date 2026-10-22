@@ -48,6 +48,7 @@ function mapPoints(events: ShipmentEvent[]): MapPoint[] {
 function ShipmentDetailBody({ id }: { id: string }) {
   const queryClient = useQueryClient();
   const [copied, setCopied] = useState(false);
+  const [embedCopied, setEmbedCopied] = useState(false);
   const { data: shipment, error } = useQuery({
     queryKey: ['shipment', id],
     queryFn: async () => (await api.get<Shipment>(`/api/v1/shipments/${id}`)).data,
@@ -96,7 +97,6 @@ function ShipmentDetailBody({ id }: { id: string }) {
     }
   };
 
-  const [embedCopied, setEmbedCopied] = useState(false);
   const copyEmbed = async () => {
     if (typeof window === 'undefined' || !shipment) return;
     const snippet =

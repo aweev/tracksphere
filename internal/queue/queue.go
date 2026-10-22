@@ -16,6 +16,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/tracksphere/tracksphere/internal/metrics"
 )
 
 // Handler processes one job. Returning a non-nil error triggers retry with
@@ -347,9 +349,11 @@ func (q *Queue) RunAs(ctx context.Context, workerID string) {
 			herr = fmt.Errorf("no handler registered for kind %q", job.Kind)
 		} else {
 			// Detached from shutdown: the job was claimed, it must complete.
+			start := time.Now()
 			hctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 			herr = handler(hctx, job.Payload)
 			cancel()
+			metrics.JobDuration.WithLabelValues(job.Kind).Observe(time.Since(start).Seconds())
 		}
 		// Completion must survive shutdown too.
 		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)

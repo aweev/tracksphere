@@ -187,11 +187,11 @@ jobs:
             sleep 2
           done
           curl -sf http://localhost:3100/login
-      - name: Playwright smoke (no backend needed)
+      - name: Playwright smoke (no backend needed, pinned dep)
         working-directory: web
         run: |
-          npx -y @playwright/test@latest install --with-deps chromium
-          npx -y @playwright/test@latest test
+          npx playwright install --with-deps chromium
+          npx playwright test
       - name: Web log on failure
         if: failure()
         run: cat /tmp/web.log || true

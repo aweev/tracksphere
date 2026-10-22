@@ -30,42 +30,35 @@ var (
 		Buckets: prometheus.DefBuckets,
 	}, []string{"method", "path"})
 
-	// SSE metrics
+	// SSE metrics. DeliveryDuration measures hub fan-out latency: the time a
+	// published event takes to be handed to every local subscriber channel
+	// (non-blocking by design — slow consumers are dropped, not awaited). The
+	// end-to-end notify→browser segment additionally depends on the browser's
+	// EventSource reconnect loop and cannot be measured server-side.
 	SSESubscribersActive = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "tracksphere_sse_subscribers_active",
 		Help: "Active SSE subscribers per tenant",
 	}, []string{"tenant"})
 
 	SSEDeliveryDuration = promauto.NewHistogram(prometheus.HistogramOpts{
-		Name:    "tracksphere_sse_delivery_duration_seconds",
-		Help:    "Time from pg_notify to browser message event",
+		Name:    "tracksphere_sse_fanout_duration_seconds",
+		Help:    "Time to fan a published event out to local subscriber channels",
 		Buckets: prometheus.DefBuckets,
 	})
 
 	SSEEventsPublishedTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "tracksphere_sse_events_published_total",
-		Help: "Total SSE events published",
+		Help: "Realtime events fanned out (or attempted) by the hub",
 	}, []string{"type", "tenant"})
 
-	// Queue metrics
-	JobsPending = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "tracksphere_jobs_pending",
-		Help: "Jobs waiting to run",
-	}, []string{"tenant", "kind"})
-
-	JobsRunning = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "tracksphere_jobs_running",
-		Help: "Jobs claimed by workers",
-	}, []string{"tenant", "kind"})
-
-	JobsDead = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "tracksphere_jobs_dead",
-		Help: "Jobs exhausted (DLQ)",
-	}, []string{"tenant", "kind"})
-
+	// Job duration is observed around handler execution in the queue runner.
+	// Job-count gauges deliberately do NOT exist here: per-tenant queue depth,
+	// job age and DLQ aging are query-derived at scrape time from the live
+	// tables in httpapi/metrics.go — lifetime in-process counters would be
+	// duplicates that reset on every restart and report the wrong namespace.
 	JobDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "tracksphere_job_duration_seconds",
-		Help:    "Job execution duration in seconds",
+		Help:    "Job handler execution duration in seconds",
 		Buckets: prometheus.DefBuckets,
 	}, []string{"kind"})
 

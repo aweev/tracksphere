@@ -90,6 +90,24 @@ func Migrate(ctx context.Context, migrationsURL string) error {
 	}
 	sort.Strings(names)
 
+	// Guard against duplicate numeric versions (two files sharing the leading
+	// number). Ordering is filename-based so no collision occurs at apply time,
+	// but a silent pair like singleton 000022_a.sql / 000022_b.sql makes the
+	// sequence ambiguous on fresh databases and invites reorder hazards when
+	// files are added later. Name a migration uniquely instead.
+	seen := map[string]string{}
+	for _, name := range names {
+		base := strings.TrimSuffix(strings.TrimPrefix(name, "migrations/"), ".sql")
+		numeric := base
+		if i := strings.IndexByte(base, '_'); i > 0 {
+			numeric = base[:i]
+		}
+		if first, dup := seen[numeric]; dup {
+			return fmt.Errorf("duplicate migration number %q: %s and %s — migrations must have unique leading versions", numeric, first, base)
+		}
+		seen[numeric] = base
+	}
+
 	for _, name := range names {
 		version := strings.TrimSuffix(strings.TrimPrefix(name, "migrations/"), ".sql")
 		if applied[version] {

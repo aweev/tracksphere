@@ -68,7 +68,6 @@ function ShipmentsBody() {
   const [search, setSearch] = useState('');
   const [debounced, setDebounced] = useState('');
   const [sort, setSort] = useState<'risk' | 'eta' | 'recent'>('risk');
-  const [serverSort, setServerSort] = useState<string>('risk');
   const [riskTier, setRiskTier] = useState('');
   const [page, setPage] = useState(0);
   const [showCreate, setShowCreate] = useState(false);
@@ -84,28 +83,28 @@ function ShipmentsBody() {
   }, [search]);
 
   const query = useMemo(() => {
+    // Every filter (including mode) is applied server-side so totals, counts
+    // and pagination stay truthful — filtering a 25-row page client-side used
+    // to show a smaller page with a total that didn't match it.
     const params = new URLSearchParams({
       limit: String(PAGE_SIZE),
       offset: String(page * PAGE_SIZE),
-      sort: serverSort,
+      sort,
     });
     if (status) params.set('status', status);
     if (carrier.trim()) params.set('carrier', carrier.trim().toLowerCase());
     if (riskTier) params.set('riskTier', riskTier);
+    if (mode) params.set('mode', mode);
     if (debounced) params.set('search', debounced);
     return params.toString();
-  }, [status, carrier, debounced, page, serverSort, riskTier]);
+  }, [status, carrier, debounced, page, sort, riskTier, mode]);
 
   const { data: result, isLoading, error, refetch } = useQuery({
-    queryKey: ['shipments', { status, carrier, debounced, page, serverSort, riskTier }],
+    queryKey: ['shipments', { status, carrier, debounced, page, sort, riskTier, mode }],
     queryFn: async () => api.get<Shipment[]>(`/api/v1/shipments?${query}`),
   });
 
-  const shipments = useMemo(() => {
-    const rows = [...(result?.data ?? [])];
-    if (mode) rows.sort((a, b) => a.mode.localeCompare(b.mode));
-    return rows;
-  }, [result, mode]);
+  const shipments = result?.data ?? [];
 
   const total = result?.meta?.total ?? 0;
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
@@ -178,7 +177,7 @@ function ShipmentsBody() {
         <select
           id="mode-filter"
           value={mode}
-          onChange={(e) => setMode(e.target.value)}
+          onChange={(e) => { setMode(e.target.value); setPage(0); }}
           className="rounded-xl border border-slate-300 px-4 py-2.5 text-sm focus:border-accent-500 focus:outline-none"
         >
           {MODES.map((m) => (
@@ -206,7 +205,6 @@ function ShipmentsBody() {
             const v = e.target.value as typeof sort;
             setSort(v);
             setPage(0);
-            setServerSort(v === 'risk' ? 'risk' : v);
           }}
           className="rounded-xl border border-slate-300 px-4 py-2.5 text-sm focus:border-accent-500 focus:outline-none"
         >

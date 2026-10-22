@@ -31,6 +31,10 @@ const logoOriginPattern =
 const nextConfig: NextConfig = {
   // Standalone output keeps the production image tiny (no node_modules copy).
   output: 'standalone',
+  // The repo has a root package-lock.json (docker/tooling) alongside web/'s;
+  // without this Turbopack infers its workspace root from lockfiles, can
+  // latch onto the repo root, and serves stale modules. Pin it to web/.
+  turbopack: { root: __dirname },
   poweredByHeader: false,
   async rewrites() {
     return [{ source: '/api/:path*', destination: `${apiBase}/api/:path*` }];

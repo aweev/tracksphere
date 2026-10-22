@@ -30,6 +30,9 @@ type ListInput struct {
 	HasPosition bool
 	// RiskTier filters to a single risk tier.
 	RiskTier string
+	// Mode filters to one transport mode (ocean|air|road|rail). Filtering
+	// server-side so totals and pages stay truthful.
+	Mode string
 }
 
 // listSelect joins the read model so the list carries the risk score, staleness,
@@ -132,6 +135,10 @@ func (r *Repository) List(ctx context.Context, tenantID uuid.UUID, in ListInput)
 		if in.RiskTier != "" {
 			args = append(args, in.RiskTier)
 			where = append(where, fmt.Sprintf("c.risk_tier=$%d", len(args)))
+		}
+		if in.Mode != "" {
+			args = append(args, in.Mode)
+			where = append(where, fmt.Sprintf("s.mode=$%d", len(args)))
 		}
 		if in.Search != "" {
 			args = append(args, "%"+strings.ToLower(in.Search)+"%")

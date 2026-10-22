@@ -118,6 +118,11 @@ func (s *Server) handleListShipments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	hasPosition := q.Get("hasPosition") == "true"
+	mode := q.Get("mode")
+	if mode != "" && !model.ValidMode(mode) {
+		writeError(w, http.StatusBadRequest, "invalid_input", "unknown mode")
+		return
+	}
 
 	user := currentUser(r)
 	rows, total, err := s.shipments.List(r.Context(), user.TenantID, shipments.ListInput{
@@ -128,6 +133,7 @@ func (s *Server) handleListShipments(w http.ResponseWriter, r *http.Request) {
 		Offset:      offset,
 		Sort:        sortKey,
 		RiskTier:    riskTier,
+		Mode:        mode,
 		HasPosition: hasPosition,
 	})
 	if err != nil {
